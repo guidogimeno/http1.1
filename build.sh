@@ -1,4 +1,4 @@
 #!/bin/bash
 
-clang -Wall main.c strings.c -o main
+clang -Wall main.c -o main
 ./main

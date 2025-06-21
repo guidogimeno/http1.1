@@ -1,30 +1,80 @@
-#include <assert.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include "main.h"
+
+#include "strings.h"
+
+#include "strings.c"
 
 typedef struct Server {
-    uint32_t sockfd;
-    uint32_t clients[1];
+    u32 sockfd;
+    u32 clients[1];
 } Server;
+
+typedef struct Lexer {
+    char *buf;
+    u32 size;
+    u32 pos;
+} Lexer;
+
+typedef enum Token_Type {
+    SPACE,
+    WORD,
+    CRLF
+} Token_Type;
+
+typedef struct Token {
+    Token_Type type;
+    String value;
+} Token;
+
+static bool is_letter(char ch) {
+    return (ch >= 'a' && ch <= 'z') ||
+        (ch >= 'A' && ch <= 'Z');
+}
+
+static Token *next_token(Allocator *allocator, Lexer *lexer) {
+    while (lexer->pos < lexer->size) {
+        char ch = lexer->buf[lexer->pos];
+
+        if (is_letter(ch)) {
+            u32 temp_pos = lexer->pos;
+            while (is_letter(lexer->buf[++temp_pos]));
+
+            String word = substring(allocator, lexer->buf, lexer->pos, temp_pos - 1);
+            Token *token = (Token *)alloc(allocator, sizeof(Token));
+            token->type = WORD;
+            token->value = word;
+
+            lexer->pos = temp_pos;
+
+            return token;
+        } 
+
+        lexer->pos++;
+    }
+
+    assert(false);
+}
 
 int main(int argc, char *argv[]) {
     printf("iniciando servidor..\n");
 
+    u32 allocator_capacity = 1024 * 1024;
+    Allocator allocator = {
+        .data = malloc(allocator_capacity),
+        .capacity = allocator_capacity,
+        .size = 0,
+    };
+
     // creacion del socket
-    uint32_t sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    u32 sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
         perror("error al crear socket");
         return -1;
     }
 
     // address reutilizable, no hace falta esperar al TIME_WAIT
-    uint32_t reuse = 1;
-    uint32_t res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
+    u32 reuse = 1;
+    u32 res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
     if (res == -1) {
         perror("error al realizar setsockopt(SO_REUSEADDR)");
         return -1;
@@ -55,7 +105,7 @@ int main(int argc, char *argv[]) {
     }
 
     char *host = inet_ntoa(server_addr.sin_addr);
-    uint16_t port = server_addr.sin_port;
+    u16 port = server_addr.sin_port;
     printf("servidor escuchando en: %s:%d\n", host, port);
 
     // aceptar conexiones
@@ -63,7 +113,7 @@ int main(int argc, char *argv[]) {
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
 
-        int client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_addr_len); // TODO: despues probar de hacer nonblocking
+        s32 client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_addr_len); // TODO: despues probar de hacer nonblocking
         if (client_fd == -1) {
             perror("error al aceptar cliente");
             return -1;
@@ -71,24 +121,35 @@ int main(int argc, char *argv[]) {
         server.clients[0] = client_fd;
 
         char *host = inet_ntoa(client_addr.sin_addr);
-        uint16_t port = client_addr.sin_port;
+        u16 port = client_addr.sin_port;
         printf("nuevo cliente aceptado: %s:%d\n", host, port);
 
-        uint8_t buf_size = 10;
-        char buf[buf_size];
+        char buf[10];
+        Lexer lexer = {
+            .buf = buf,
+            .size = 10, // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
+            .pos = 0,
+        };
+
+        Token tokens[10];
+
         while (true) {
-            int16_t b = read(client_fd, buf, buf_size);
-            if (b == 0) {
+            // TODO: Necesito leer linea por linea
+            s16 bytes_read = read(client_fd, lexer.buf, lexer.size);
+            if (bytes_read == 0) {
                 printf("el cliente cerro la conexion:%s\n", host);
                 break;
             } 
-            if (b == -1) {
+            if (bytes_read == -1) {
                 perror("error al leer del cliente\n");
                 break;
             }
 
-            buf[b] = '\0';
-            printf("recibido: %s\n", buf);
+            // start line
+            while (lexer.pos < lexer.size) {
+                Token *token = next_token(&allocator, &lexer);
+                printf("token.type=%d token.data=%s\n", token->type, token->value.data);
+            }
         }
 
         if (close(client_fd) == -1) {
