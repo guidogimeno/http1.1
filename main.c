@@ -11,6 +11,7 @@ typedef struct Server {
 
 typedef struct Lexer {
     char *buf;
+    u32 capacity;
     u32 size;
     u32 pos;
 } Lexer;
@@ -26,33 +27,62 @@ typedef struct Token {
     String value;
 } Token;
 
+typedef struct Token_Array {
+    Token *tokens;
+    u32 capacity;
+    u32 size;
+} Token_Array;
+
+static void append_token(Allocator *allocator, Token_Array *arr, Token token) {
+    // si la capacidad llega al maximo se realoca y se utiliza el doble de capacidad
+    if (arr->size >= arr->capacity) {
+        printf("old size=%d cap=%d\n", arr->size, arr->capacity);
+        u32 capacity_bytes = sizeof(Token) * arr->capacity;
+        Token *new_memory = (Token *)alloc(allocator, capacity_bytes * 2);
+        arr->tokens = memcpy(new_memory, arr->tokens, capacity_bytes);
+        arr->capacity *= 2;
+        printf("new size=%d cap=%d\n", arr->size, arr->capacity);
+    }
+
+    arr->tokens[arr->size] = token;
+    arr->size++;
+}
+
 static bool is_letter(char ch) {
     return (ch >= 'a' && ch <= 'z') ||
         (ch >= 'A' && ch <= 'Z');
 }
 
 static Token *next_token(Allocator *allocator, Lexer *lexer) {
+    u32 pos = lexer->pos;
+
     while (lexer->pos < lexer->size) {
         char ch = lexer->buf[lexer->pos];
-
+    
         if (is_letter(ch)) {
             u32 temp_pos = lexer->pos;
-            while (is_letter(lexer->buf[++temp_pos]));
+            while (++temp_pos < lexer->size) {
+                if (!is_letter(lexer->buf[temp_pos])) {
+                    String word = substring(allocator, lexer->buf, lexer->pos, temp_pos - 1);
+                    Token *token = (Token *)alloc(allocator, sizeof(Token));
+                    token->type = WORD;
+                    token->value = word;
 
-            String word = substring(allocator, lexer->buf, lexer->pos, temp_pos - 1);
-            Token *token = (Token *)alloc(allocator, sizeof(Token));
-            token->type = WORD;
-            token->value = word;
+                    lexer->pos = temp_pos;
 
-            lexer->pos = temp_pos;
+                    return token;
+                }
+            }
 
-            return token;
+            return NULL;
         } 
-
+    
         lexer->pos++;
     }
 
-    assert(false);
+    lexer->pos = pos;
+
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
@@ -124,31 +154,44 @@ int main(int argc, char *argv[]) {
         u16 port = client_addr.sin_port;
         printf("nuevo cliente aceptado: %s:%d\n", host, port);
 
-        char buf[10];
+        char buf[1024];
         Lexer lexer = {
             .buf = buf,
-            .size = 10, // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
+            .capacity = 1024,
+            .size = 0, // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
             .pos = 0,
         };
 
-        Token tokens[10];
+        Token tokens[2];
+        Token_Array token_arr = {
+            .tokens = tokens,
+            .capacity = 2,
+            .size = 0,
+        };
 
         while (true) {
-            // TODO: Necesito leer linea por linea
-            s16 bytes_read = read(client_fd, lexer.buf, lexer.size);
+            s16 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
             if (bytes_read == 0) {
                 printf("el cliente cerro la conexion:%s\n", host);
                 break;
-            } 
-            if (bytes_read == -1) {
+            } else if (bytes_read == -1) {
                 perror("error al leer del cliente\n");
                 break;
             }
 
-            // start line
-            while (lexer.pos < lexer.size) {
+            lexer.size = bytes_read - 1;
+
+            // tokens
+            while (true) {
                 Token *token = next_token(&allocator, &lexer);
-                printf("token.type=%d token.data=%s\n", token->type, token->value.data);
+                if (token == NULL) {
+                    break;
+                }
+                append_token(&allocator, &token_arr, *token);
+            }
+            
+            for (u32 i = 0; i < token_arr.size; i++) {
+                printf("token->type=%d token->data=%s\n", token_arr.tokens[i].type, token_arr.tokens[i].value.data);
             }
         }
 
