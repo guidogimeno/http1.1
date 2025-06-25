@@ -1,5 +1,5 @@
 #!/bin/bash
 
-clang -Wall main.c -o main
+clang -std=c11 -Wall -Werror main.c -o main
 ./main
 

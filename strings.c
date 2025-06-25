@@ -1,7 +1,7 @@
-String new_string(char const *text) {
+String string(char const *text) {
     String str = {
         .data = text,
-        .len = string_len(text),
+        .length = string_len(text),
     };
     return str;
 }
@@ -9,12 +9,12 @@ String new_string(char const *text) {
 u32 string_len(char const *text) {
     if (text == NULL) return 0;
 
-    int i = 0;
-    int keep_going = 1;
+    u32 i = 0;
+    u32 keep_going = true;
 
     while(keep_going) {
         if (text[i] == '\0') {
-            keep_going = 0;
+            keep_going = false;
         } else {
             i++;
         }
@@ -22,16 +22,49 @@ u32 string_len(char const *text) {
     return i;
 }
 
-bool strings_are_equal(String *s1, String *s2) {
+bool string_eq(String *s1, String *s2) {
     assert(s1 != NULL);
     assert(s2 != NULL);
 
-    if (s1->len != s2->len) {
+    if (s1->length != s2->length) {
         return false;
     }
     
-    for (u32 i = 0; i < s1->len; i++) {
+    for (u32 i = 0; i < s1->length; i++) {
         if (s1->data[i] != s2->data[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool string_eq_cstr(String *s1, char *s2) {
+    assert(s1 != NULL);
+    assert(s2 != NULL);
+
+    if (s1->length != string_len(s2)) {
+        return false;
+    }
+    
+    for (u32 i = 0; i < s1->length; i++) {
+        if (s1->data[i] != s2[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool cstr_eq(char *s1, char *s2) {
+    assert(s1 != NULL);
+    assert(s2 != NULL);
+
+    u32 len = string_len(s1);
+    if (len != string_len(s2)) {
+        return false;
+    }
+    
+    for (u32 i = 0; i < len; i++) {
+        if (s1[i] != s2[i]) {
             return false;
         }
     }
@@ -49,7 +82,7 @@ String substring(Allocator *allocator, const char *orig, u32 start, u32 end) {
 
     String str = {
         .data = dest,
-        .len = len
+        .length = len
     };
 
     return str;

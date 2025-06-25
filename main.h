@@ -31,3 +31,25 @@ void *alloc(Allocator *allocator, u32 size) {
     allocator->size += size;
     return result;
 }
+
+typedef struct Server {
+    u32 sockfd;
+    u32 clients[1];
+} Server;
+
+typedef enum Method {
+    GET,
+    PUT,
+    POST,
+    DELETE
+} Method;
+
+typedef struct Lexer {
+    char *buf;
+    u32 capacity;
+    u32 length;
+    u32 buf_position; // current position in buffer
+    u32 read_position; // current read position
+    char current_char;
+} Lexer;
+

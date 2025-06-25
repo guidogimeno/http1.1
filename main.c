@@ -4,48 +4,29 @@
 
 #include "strings.c"
 
-typedef struct Server {
-    u32 sockfd;
-    u32 clients[1];
-} Server;
+// static void append_token(Allocator *allocator, Token_Array *arr, Token token) {
+//     // si la capacidad llega al maximo se realoca y se utiliza el doble de capacidad
+//     if (arr->size >= arr->capacity) {
+//         printf("old size=%d cap=%d\n", arr->size, arr->capacity);
+//         u32 capacity_bytes = sizeof(Token) * arr->capacity;
+//         Token *new_memory = (Token *)alloc(allocator, capacity_bytes * 2);
+//         arr->tokens = memcpy(new_memory, arr->tokens, capacity_bytes);
+//         arr->capacity *= 2;
+//         printf("new size=%d cap=%d\n", arr->size, arr->capacity);
+//     }
+//
+//     arr->tokens[arr->size] = token;
+//     arr->size++;
+// }
+//
 
-typedef struct Lexer {
-    char *buf;
-    u32 capacity;
-    u32 size;
-    u32 pos;
-} Lexer;
-
-typedef enum Token_Type {
-    SPACE,
-    WORD,
-    CRLF
-} Token_Type;
-
-typedef struct Token {
-    Token_Type type;
-    String value;
-} Token;
-
-typedef struct Token_Array {
-    Token *tokens;
-    u32 capacity;
-    u32 size;
-} Token_Array;
-
-static void append_token(Allocator *allocator, Token_Array *arr, Token token) {
-    // si la capacidad llega al maximo se realoca y se utiliza el doble de capacidad
-    if (arr->size >= arr->capacity) {
-        printf("old size=%d cap=%d\n", arr->size, arr->capacity);
-        u32 capacity_bytes = sizeof(Token) * arr->capacity;
-        Token *new_memory = (Token *)alloc(allocator, capacity_bytes * 2);
-        arr->tokens = memcpy(new_memory, arr->tokens, capacity_bytes);
-        arr->capacity *= 2;
-        printf("new size=%d cap=%d\n", arr->size, arr->capacity);
-    }
-
-    arr->tokens[arr->size] = token;
-    arr->size++;
+static void init_lexer(Lexer *lexer, char *buf, u32 capacity) {
+    lexer->buf = buf;
+    lexer->capacity = capacity; // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
+    lexer->length = 0; 
+    lexer->buf_position = 0;
+    lexer->read_position = 0;
+    lexer->current_char = 0;
 }
 
 static bool is_letter(char ch) {
@@ -53,36 +34,93 @@ static bool is_letter(char ch) {
         (ch >= 'A' && ch <= 'Z');
 }
 
-static Token *next_token(Allocator *allocator, Lexer *lexer) {
-    u32 pos = lexer->pos;
+static bool is_alphanum(char ch) {
+    return (ch >= '0' && ch <= '9') ||
+           (ch >= 'A' && ch <= 'Z') ||
+           (ch >= 'a' && ch <= 'z');
+}
 
-    while (lexer->pos < lexer->size) {
-        char ch = lexer->buf[lexer->pos];
-    
-        if (is_letter(ch)) {
-            u32 temp_pos = lexer->pos;
-            while (++temp_pos < lexer->size) {
-                if (!is_letter(lexer->buf[temp_pos])) {
-                    String word = substring(allocator, lexer->buf, lexer->pos, temp_pos - 1);
-                    Token *token = (Token *)alloc(allocator, sizeof(Token));
-                    token->type = WORD;
-                    token->value = word;
+static void read_char(Lexer *lexer) {
+    if (lexer->read_position >= lexer->length) {
+        lexer->current_char = 0;
+    } else {
+        lexer->current_char = lexer->buf[lexer->read_position];
+    }
+    lexer->buf_position = lexer->read_position;
+    lexer->read_position++;
+}
 
-                    lexer->pos = temp_pos;
+static void parse_request_line(Allocator *allocator, Lexer *lexer) {
+    do {
+        read_char(lexer);
+    } while (is_letter(lexer->current_char));
 
-                    return token;
-                }
-            }
+    Method method;
+    String uri;
+    String version = string("HTTP/1.1");
 
-            return NULL;
-        } 
-    
-        lexer->pos++;
+    // Method
+    String method_str = substring(allocator, lexer->buf, 0, lexer->buf_position - 1);
+    if (string_eq_cstr(&method_str, "GET")) {
+        method = GET;
+    } else if (string_eq_cstr(&method_str, "PUT")) {
+        method = PUT;
+    } else if (string_eq_cstr(&method_str, "POST")) {
+        method = POST;
+    } else if (string_eq_cstr(&method_str, "DELETE")) {
+        method = DELETE;
+    } else {
+        // TODO: responder un mensaje de error
+        assert(false && "el Method no existe");
+        return;
     }
 
-    lexer->pos = pos;
+    // Space
+    if (lexer->current_char != ' ') {
+        // TODO: responder un mensaje de error
+        assert(false && "tiene que haber un espacio entre el method y la uri");
+    }
 
-    return NULL;
+    // URI
+    u32 uri_start = lexer->read_position;
+    do {
+        read_char(lexer);
+    } while(is_alphanum(lexer->current_char) || lexer->current_char == '/');
+
+    if (lexer->buf_position == uri_start) {
+        // TODO: responder un mensaje de error porque no puede ser vacio
+        assert(false && "la uri esta vacia");
+    }
+
+    uri = substring(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
+
+    // Space
+    if (lexer->current_char != ' ') {
+        // TODO: responder un mensaje de error
+        assert(false && "tiene que haber un espacio entre la uri y la version");
+    }
+
+    for (u32 i = 0; i < 8; i++) { // len(HTTP/1.1)
+        read_char(lexer);
+        if (version.data[i] != lexer->current_char) {
+            // TODO: responder un mensaje de error
+            assert(false && "la version no coincide");
+        }
+    }
+
+    read_char(lexer);
+    if (lexer->current_char != '\r') {
+        // TODO: responder un mensaje de error
+        assert(false && "el request-line tiene que terminar con \\r");
+    }
+
+    read_char(lexer);
+    if (lexer->current_char != '\n') {
+        // TODO: responder un mensaje de error
+        assert(false && "el request-line tiene que terminar con \\n");
+    }
+
+    printf("Resultado: Method=%d URI=%s Version:%s\n", method, uri.data, version.data);
 }
 
 int main(int argc, char *argv[]) {
@@ -155,22 +193,11 @@ int main(int argc, char *argv[]) {
         printf("nuevo cliente aceptado: %s:%d\n", host, port);
 
         char buf[1024];
-        Lexer lexer = {
-            .buf = buf,
-            .capacity = 1024,
-            .size = 0, // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
-            .pos = 0,
-        };
-
-        Token tokens[2];
-        Token_Array token_arr = {
-            .tokens = tokens,
-            .capacity = 2,
-            .size = 0,
-        };
+        Lexer lexer = {0};
+        init_lexer(&lexer, buf, 1024);
 
         while (true) {
-            s16 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
+            s32 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
             if (bytes_read == 0) {
                 printf("el cliente cerro la conexion:%s\n", host);
                 break;
@@ -178,21 +205,9 @@ int main(int argc, char *argv[]) {
                 perror("error al leer del cliente\n");
                 break;
             }
+            lexer.length = bytes_read - 1;
 
-            lexer.size = bytes_read - 1;
-
-            // tokens
-            while (true) {
-                Token *token = next_token(&allocator, &lexer);
-                if (token == NULL) {
-                    break;
-                }
-                append_token(&allocator, &token_arr, *token);
-            }
-            
-            for (u32 i = 0; i < token_arr.size; i++) {
-                printf("token->type=%d token->data=%s\n", token_arr.tokens[i].type, token_arr.tokens[i].value.data);
-            }
+            parse_request_line(&allocator, &lexer);
         }
 
         if (close(client_fd) == -1) {
