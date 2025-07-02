@@ -1,5 +1,33 @@
 #!/bin/bash
 
-clang -std=c11 -Wall -Werror main.c -o main
-./main
+usage() {
+    echo "Usage: $0 [run|build|debug|clean]"
+    echo "  run    : Builds the project and then executes it."
+    echo "  build  : Compiles the project."
+    echo "  debug  : Compiles the project with debugging symbols."
+    echo "  clean  : Removes the compiled executable."
+    exit 1
+}
+
+case "$1" in
+    "run")
+        clang -std=c11 -Wall -Werror main.c -o main
+        ./main
+        ;;
+    "build")
+        clang -std=c11 -Wall -Werror main.c -o main
+        ;;
+    "debug")
+        clang -g -std=c11 -Wall -Werror main.c -o main
+        gdb ./main
+        ;;
+    "clean")
+        if [ -f "main" ]; then
+            rm "main"
+        fi
+        ;;
+    *)
+        usage
+        ;;
+esac
 

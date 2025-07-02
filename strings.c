@@ -77,8 +77,9 @@ String substring(Allocator *allocator, const char *orig, u32 start, u32 end) {
 
     u32 len = end - start + 1;
 
-    char *dest = (char *)alloc(allocator, len);
+    char *dest = (char *)alloc(allocator, len + 1); // +1 por el \0
     dest = memcpy(dest, orig + start, len);
+    dest[len + 1] = '\0';
 
     String str = {
         .data = dest,

@@ -4,21 +4,37 @@
 
 #include "strings.c"
 
-// static void append_token(Allocator *allocator, Token_Array *arr, Token token) {
-//     // si la capacidad llega al maximo se realoca y se utiliza el doble de capacidad
-//     if (arr->size >= arr->capacity) {
-//         printf("old size=%d cap=%d\n", arr->size, arr->capacity);
-//         u32 capacity_bytes = sizeof(Token) * arr->capacity;
-//         Token *new_memory = (Token *)alloc(allocator, capacity_bytes * 2);
-//         arr->tokens = memcpy(new_memory, arr->tokens, capacity_bytes);
-//         arr->capacity *= 2;
-//         printf("new size=%d cap=%d\n", arr->size, arr->capacity);
-//     }
-//
-//     arr->tokens[arr->size] = token;
-//     arr->size++;
-// }
-//
+typedef struct Server {
+    u32 sockfd;
+    u32 clients[1];
+} Server;
+
+typedef enum Method {
+    GET,
+    PUT,
+    POST,
+    DELETE
+} Method;
+
+typedef struct Lexer {
+    char *buf;
+    u32 capacity;
+    u32 length;
+    u32 buf_position; // current position in buffer
+    u32 read_position; // current read position
+    char current_char;
+} Lexer;
+
+typedef struct Headers {
+    // ???
+} Headers;
+
+typedef struct Request {
+    Method method;
+    String uri;
+    String version;
+    Headers *headers;
+} Request;
 
 static void init_lexer(Lexer *lexer, char *buf, u32 capacity) {
     lexer->buf = buf;
@@ -41,7 +57,7 @@ static bool is_alphanum(char ch) {
 }
 
 static void read_char(Lexer *lexer) {
-    if (lexer->read_position >= lexer->length) {
+    if (lexer->read_position > lexer->length) {
         lexer->current_char = 0;
     } else {
         lexer->current_char = lexer->buf[lexer->read_position];
@@ -50,25 +66,23 @@ static void read_char(Lexer *lexer) {
     lexer->read_position++;
 }
 
-static void parse_request_line(Allocator *allocator, Lexer *lexer) {
+static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *request) {
     do {
         read_char(lexer);
     } while (is_letter(lexer->current_char));
 
-    Method method;
-    String uri;
-    String version = string("HTTP/1.1");
+    request->version = string("HTTP/1.1");
 
     // Method
     String method_str = substring(allocator, lexer->buf, 0, lexer->buf_position - 1);
     if (string_eq_cstr(&method_str, "GET")) {
-        method = GET;
+        request->method = GET;
     } else if (string_eq_cstr(&method_str, "PUT")) {
-        method = PUT;
+        request->method = PUT;
     } else if (string_eq_cstr(&method_str, "POST")) {
-        method = POST;
+        request->method = POST;
     } else if (string_eq_cstr(&method_str, "DELETE")) {
-        method = DELETE;
+        request->method = DELETE;
     } else {
         // TODO: responder un mensaje de error
         assert(false && "el Method no existe");
@@ -92,7 +106,7 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer) {
         assert(false && "la uri esta vacia");
     }
 
-    uri = substring(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
+    request->uri = substring(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
 
     // Space
     if (lexer->current_char != ' ') {
@@ -102,7 +116,7 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer) {
 
     for (u32 i = 0; i < 8; i++) { // len(HTTP/1.1)
         read_char(lexer);
-        if (version.data[i] != lexer->current_char) {
+        if (request->version.data[i] != lexer->current_char) {
             // TODO: responder un mensaje de error
             assert(false && "la version no coincide");
         }
@@ -120,7 +134,67 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer) {
         assert(false && "el request-line tiene que terminar con \\n");
     }
 
-    printf("Resultado: Method=%d URI=%s Version:%s\n", method, uri.data, version.data);
+    printf("Resultado: Method=%d URI=%s Version:%s\n", request->method, request->uri.data, request->version.data);
+}
+
+static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) {
+    do {
+        u32 field_name_start = lexer->read_position;
+
+        do {
+            read_char(lexer);
+        } while (is_alphanum(lexer->current_char) || 
+                 lexer->current_char == '-'       ||
+                 lexer->current_char == '_');
+
+        // si ya no quedan field names
+        if (lexer->read_position - field_name_start == 1) {
+            if (lexer->current_char != '\r') {
+                assert(0 && "headers estan mal formados");
+            }
+            read_char(lexer);
+            if (lexer->current_char != '\n') {
+                assert(0 && "headers estan mal formados");
+            }
+            return;
+        }
+        
+        if (lexer->current_char == ':') {
+            String field_name = substring(allocator, lexer->buf, field_name_start, lexer->buf_position - 1);
+
+            // espacio
+            read_char(lexer);
+            if (lexer->current_char != ' ') {
+                assert(0 && "aca deberia haber un espacio");
+            }
+
+            // field value
+            u32 field_value_start = lexer->read_position;
+            u32 field_value_end;
+
+            do {
+                read_char(lexer);
+            } while (lexer->current_char != '\r');
+
+            field_value_end = lexer->read_position - 1;
+
+            String field_value = substring(allocator, lexer->buf, field_value_start, field_value_end);
+            printf("%s: %s\n", field_name.data, field_value.data);
+
+            // \r\n
+            read_char(lexer);
+            if (lexer->current_char != '\n') {
+                assert(0 && "headers estan mal formados");
+            }
+        } else {
+            assert(0 && "headers estan mal formados");
+        }
+    } while (lexer->current_char != '\r');
+
+    read_char(lexer);
+    if (lexer->current_char != '\n') {
+        assert(0 && "headers tienen que terminar con el \\n");
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -173,7 +247,7 @@ int main(int argc, char *argv[]) {
     }
 
     char *host = inet_ntoa(server_addr.sin_addr);
-    u16 port = server_addr.sin_port;
+    u16 port = ntohs(server_addr.sin_port);
     printf("servidor escuchando en: %s:%d\n", host, port);
 
     // aceptar conexiones
@@ -189,7 +263,7 @@ int main(int argc, char *argv[]) {
         server.clients[0] = client_fd;
 
         char *host = inet_ntoa(client_addr.sin_addr);
-        u16 port = client_addr.sin_port;
+        u16 port = ntohs(client_addr.sin_port);
         printf("nuevo cliente aceptado: %s:%d\n", host, port);
 
         char buf[1024];
@@ -207,7 +281,10 @@ int main(int argc, char *argv[]) {
             }
             lexer.length = bytes_read - 1;
 
-            parse_request_line(&allocator, &lexer);
+            Request request = {0};
+            parse_request_line(&allocator, &lexer, &request);
+            parse_headers(&allocator, &lexer, &request);
+            printf("cantidad alocada: %d\n", allocator.size);
         }
 
         if (close(client_fd) == -1) {
