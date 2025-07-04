@@ -19,8 +19,11 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
+typedef float f32;
+typedef double f64;
+
 typedef struct Allocator {
-    char *data;
+    u8 *data;
     u32 size;
     u32 capacity;
 } Allocator;

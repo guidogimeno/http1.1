@@ -19,27 +19,38 @@ typedef enum Method {
 typedef struct Lexer {
     char *buf;
     u32 capacity;
-    u32 length;
+    u32 size;
     u32 buf_position; // current position in buffer
     u32 read_position; // current read position
     char current_char;
 } Lexer;
 
-typedef struct Headers {
-    // ???
-} Headers;
+typedef struct Header {
+    String field_name;
+    String fiel_value;
+} Header;
 
 typedef struct Request {
     Method method;
     String uri;
     String version;
-    Headers *headers;
+    Header *headers;
 } Request;
+
+// djb2
+static u32 hash(String s) {
+    u32 hash = 5381; // numero primo
+    for (u32 i = 0; i < s.size; i++) {
+        // (hash x 33) + ch = ((hash x 32) + hash) + ch
+        hash = ((hash << 5) + hash) + s.data[i];
+    }
+    return hash;
+}
 
 static void init_lexer(Lexer *lexer, char *buf, u32 capacity) {
     lexer->buf = buf;
     lexer->capacity = capacity; // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
-    lexer->length = 0; 
+    lexer->size = 0; 
     lexer->buf_position = 0;
     lexer->read_position = 0;
     lexer->current_char = 0;
@@ -57,7 +68,7 @@ static bool is_alphanum(char ch) {
 }
 
 static void read_char(Lexer *lexer) {
-    if (lexer->read_position > lexer->length) {
+    if (lexer->read_position > lexer->size) {
         lexer->current_char = 0;
     } else {
         lexer->current_char = lexer->buf[lexer->read_position];
@@ -200,20 +211,29 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
 int main(int argc, char *argv[]) {
     printf("iniciando servidor..\n");
 
+    String foo = string("foo");
+    printf("num=%u\n", hash(foo));
+
+    String bar = string("barbaz");
+    printf("num=%u\n", hash(bar));
+
+    String baz = string("12e41234");
+    printf("num=%u\n", hash(baz));
+
     u32 allocator_capacity = 1024 * 1024;
     Allocator allocator = {
         .data = malloc(allocator_capacity),
         .capacity = allocator_capacity,
         .size = 0,
     };
-
+    
     // creacion del socket
     u32 sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
         perror("error al crear socket");
         return -1;
     }
-
+    
     // address reutilizable, no hace falta esperar al TIME_WAIT
     u32 reuse = 1;
     u32 res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
@@ -221,55 +241,55 @@ int main(int argc, char *argv[]) {
         perror("error al realizar setsockopt(SO_REUSEADDR)");
         return -1;
     }
-
+    
     Server server = {
         .sockfd = sockfd
     };
-
+    
     // bind address al socket
     struct sockaddr_in server_addr = {
         .sin_family = AF_INET,
         .sin_port = htons(8080),
         .sin_addr.s_addr = inet_addr("127.0.0.1"),
     };
-
+    
     res = bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr));
     if (res == -1) {
         perror("error al realizar el bind");
         return -1;
     }
-
+    
     // escuchar a traves del socket
     res = listen(sockfd, 1); // tamanio maximo de la cola de conexiones pendientes
     if (res == -1) {
         perror("error al realizar el listen");
         return -1;
     }
-
+    
     char *host = inet_ntoa(server_addr.sin_addr);
     u16 port = ntohs(server_addr.sin_port);
     printf("servidor escuchando en: %s:%d\n", host, port);
-
+    
     // aceptar conexiones
     while (true) {
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
-
+    
         s32 client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_addr_len); // TODO: despues probar de hacer nonblocking
         if (client_fd == -1) {
             perror("error al aceptar cliente");
             return -1;
         }
         server.clients[0] = client_fd;
-
+    
         char *host = inet_ntoa(client_addr.sin_addr);
         u16 port = ntohs(client_addr.sin_port);
         printf("nuevo cliente aceptado: %s:%d\n", host, port);
-
+    
         char buf[1024];
         Lexer lexer = {0};
         init_lexer(&lexer, buf, 1024);
-
+    
         while (true) {
             s32 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
             if (bytes_read == 0) {
@@ -279,22 +299,23 @@ int main(int argc, char *argv[]) {
                 perror("error al leer del cliente\n");
                 break;
             }
-            lexer.length = bytes_read - 1;
-
+            lexer.size = bytes_read - 1;
+    
             Request request = {0};
             parse_request_line(&allocator, &lexer, &request);
             parse_headers(&allocator, &lexer, &request);
+
             printf("cantidad alocada: %d\n", allocator.size);
         }
-
+    
         if (close(client_fd) == -1) {
             perror("error al cerrar el client_fd");
             return -1;
         }
     }
-   
+      
     close(sockfd);
-
+    
     return 0;
 }
 

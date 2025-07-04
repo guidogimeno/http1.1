@@ -11,6 +11,9 @@ usage() {
 
 case "$1" in
     "run")
+        if [ -f "main" ]; then
+            rm "main"
+        fi
         clang -std=c11 -Wall -Werror main.c -o main
         ./main
         ;;
@@ -19,7 +22,7 @@ case "$1" in
         ;;
     "debug")
         clang -g -std=c11 -Wall -Werror main.c -o main
-        gdb ./main
+        gdb main
         ;;
     "clean")
         if [ -f "main" ]; then
