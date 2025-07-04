@@ -30,21 +30,39 @@ typedef struct Header {
     String fiel_value;
 } Header;
 
+typedef struct HeadersMap {
+    Header *headers;
+    u32 size;
+} HeadersMap;
+
 typedef struct Request {
     Method method;
     String uri;
     String version;
-    Header *headers;
+    HeadersMap *headers_hash;
 } Request;
 
 // djb2
-static u32 hash(String s) {
+static u32 header_hash(String s) {
     u32 hash = 5381; // numero primo
     for (u32 i = 0; i < s.size; i++) {
         // (hash x 33) + ch = ((hash x 32) + hash) + ch
         hash = ((hash << 5) + hash) + s.data[i];
     }
     return hash;
+}
+
+static void headers_put(HeadersMap *headers_map, String field_name, String field_value) {
+    u32 hash = header_hash(filed_name);
+    u32 index = hash % headers_map->size;
+    Header header = headers_map->headers[index];
+
+    // TODO: tengo que ver que estrategia de colisiones usar. Aun no me decido.
+    if (string_eq(header.field_name, field_name)) {
+        
+    } else {
+
+    }
 }
 
 static void init_lexer(Lexer *lexer, char *buf, u32 capacity) {
@@ -210,15 +228,6 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
 
 int main(int argc, char *argv[]) {
     printf("iniciando servidor..\n");
-
-    String foo = string("foo");
-    printf("num=%u\n", hash(foo));
-
-    String bar = string("barbaz");
-    printf("num=%u\n", hash(bar));
-
-    String baz = string("12e41234");
-    printf("num=%u\n", hash(baz));
 
     u32 allocator_capacity = 1024 * 1024;
     Allocator allocator = {
