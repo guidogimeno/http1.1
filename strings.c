@@ -71,7 +71,7 @@ bool cstr_eq(char *s1, char *s2) {
     return true;
 }
 
-String substring(Allocator *allocator, const char *orig, u32 start, u32 end) {
+String string_sub(Allocator *allocator, const char *orig, u32 start, u32 end) {
     assert(orig != NULL);
     assert(start <= end);
 

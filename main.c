@@ -20,27 +20,37 @@ typedef struct Lexer {
     char *buf;
     u32 capacity;
     u32 size;
-    u32 buf_position; // current position in buffer
-    u32 read_position; // current read position
+    u32 buf_position;
+    u32 read_position;
     char current_char;
 } Lexer;
 
+// Headers
 typedef struct Header {
     String field_name;
-    String fiel_value;
+    String field_value;
+    bool occupied;
 } Header;
 
-typedef struct HeadersMap {
-    Header *headers;
-    u32 size;
-} HeadersMap;
+#define MAX_HEADERS_CAPACITY 16 // osea que solo acepta hastas 12 headers
+typedef struct Headers_Map {
+    Header headers[MAX_HEADERS_CAPACITY];
+    u32 length;
+    u32 capacity;
+} Headers_Map;
 
 typedef struct Request {
     Method method;
     String uri;
     String version;
-    HeadersMap *headers_hash;
+    Headers_Map headers_map;
 } Request;
+
+static void init_headers_map(Headers_Map *headers_map) {
+    headers_map->length = 0;
+    headers_map->capacity = MAX_HEADERS_CAPACITY;
+    memset(headers_map->headers, 0, headers_map->capacity);
+}
 
 // djb2
 static u32 header_hash(String s) {
@@ -52,18 +62,75 @@ static u32 header_hash(String s) {
     return hash;
 }
 
-static void headers_put(HeadersMap *headers_map, String field_name, String field_value) {
-    u32 hash = header_hash(filed_name);
-    u32 index = hash % headers_map->size;
-    Header header = headers_map->headers[index];
+static void headers_put(Headers_Map *headers_map, String field_name, String field_value) {
+    u32 headers_cap = headers_map->capacity;
 
-    // TODO: tengo que ver que estrategia de colisiones usar. Aun no me decido.
-    if (string_eq(header.field_name, field_name)) {
+    assert(headers_map->length < (0.75 * headers_cap));
+
+    u32 header_index = header_hash(field_name) % headers_cap; 
+    Header *headers = headers_map->headers;
+    Header *header = &headers[header_index];
+
+    bool is_occupied = header->occupied;
+    bool different_field_name = !string_eq(&header->field_name, &field_name); 
+
+    if (is_occupied && different_field_name) {
+        // tiene que pegar la vuelta
+        // y el peor escenario es iterar el array entero
         
-    } else {
+        u32 iterations = 0;
 
+        while (iterations < headers_cap && header->occupied) {
+            iterations++;
+
+            header_index++;
+            if (header_index >= headers_cap) {
+                header_index = 0;
+            }
+
+            header = &headers[header_index];
+        }
+
+        assert(!header->occupied && "el map no puede estar lleno");
     }
+
+    header->field_name = field_name;
+    header->field_value = field_value;
+    header->occupied = true;
+
+    headers_map->length++;
 }
+
+// static String *headers_get(Headers_Map *headers_map, String field_name) {
+//     u32 headers_cap = headers_map->capacity;
+//     u32 header_index = header_hash(field_name) % headers_cap; 
+//
+//     Header *headers = headers_map->headers;
+//     Header *header = &headers[header_index];
+//
+//     if (string_eq(&header->field_name, &field_name)) {
+//         return &header->field_value;
+//     }
+//
+//     u32 iterations = 0;
+//
+//     while (iterations < headers_cap && header->occupied) {
+//         iterations++;
+//
+//         header_index++;
+//         if (header_index >= headers_cap) {
+//             header_index = 0;
+//         }
+//
+//         // comparar compilado
+//         header = &headers[header_index];
+//         if (string_eq(&header->field_name, &field_name)) {
+//             return &header->field_value;
+//         }
+//     }
+//
+//     return NULL;
+// }
 
 static void init_lexer(Lexer *lexer, char *buf, u32 capacity) {
     lexer->buf = buf;
@@ -103,7 +170,7 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
     request->version = string("HTTP/1.1");
 
     // Method
-    String method_str = substring(allocator, lexer->buf, 0, lexer->buf_position - 1);
+    String method_str = string_sub(allocator, lexer->buf, 0, lexer->buf_position - 1);
     if (string_eq_cstr(&method_str, "GET")) {
         request->method = GET;
     } else if (string_eq_cstr(&method_str, "PUT")) {
@@ -135,7 +202,7 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
         assert(false && "la uri esta vacia");
     }
 
-    request->uri = substring(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
+    request->uri = string_sub(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
 
     // Space
     if (lexer->current_char != ' ') {
@@ -163,7 +230,12 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
         assert(false && "el request-line tiene que terminar con \\n");
     }
 
-    printf("Resultado: Method=%d URI=%s Version:%s\n", request->method, request->uri.data, request->version.data);
+    printf(
+        "Resultado -> Method=%d URI=%.*s Version:%.*s\n",
+        request->method,
+        string_print(request->uri),
+        string_print(request->version)
+    );
 }
 
 static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) {
@@ -189,7 +261,7 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
         }
         
         if (lexer->current_char == ':') {
-            String field_name = substring(allocator, lexer->buf, field_name_start, lexer->buf_position - 1);
+            String field_name = string_sub(allocator, lexer->buf, field_name_start, lexer->buf_position - 1);
 
             // espacio
             read_char(lexer);
@@ -207,8 +279,10 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
 
             field_value_end = lexer->read_position - 1;
 
-            String field_value = substring(allocator, lexer->buf, field_value_start, field_value_end);
-            printf("%s: %s\n", field_name.data, field_value.data);
+            String field_value = string_sub(allocator, lexer->buf, field_value_start, field_value_end);
+            // printf("%.*s: %.*s\n", string_print(field_name), string_print(field_value));
+
+            headers_put(&request->headers_map, field_name, field_value);
 
             // \r\n
             read_char(lexer);
@@ -310,7 +384,12 @@ int main(int argc, char *argv[]) {
             }
             lexer.size = bytes_read - 1;
     
+            Headers_Map headers_map;
+            init_headers_map(&headers_map);
+
             Request request = {0};
+            request.headers_map = headers_map;
+
             parse_request_line(&allocator, &lexer, &request);
             parse_headers(&allocator, &lexer, &request);
 
