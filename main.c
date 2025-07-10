@@ -122,7 +122,6 @@ static String *headers_get(Headers_Map *headers_map, String field_name) {
             header_index = 0;
         }
 
-        // comparar compilado
         header = &headers[header_index];
         if (string_eq(&header->field_name, &field_name)) {
             return &header->field_value;
