@@ -14,14 +14,14 @@ case "$1" in
         if [ -f "main" ]; then
             rm "main"
         fi
-        clang -std=c11 -Wall -Werror main.c -o main
+        clang -O2 -std=c11 -Wall -Werror main.c -o main
         ./main
         ;;
     "build")
-        clang -std=c11 -Wall -Werror main.c -o main
+        clang -O2 -std=c11 -Wall -Werror main.c -o main
         ;;
     "debug")
-        clang -g -std=c11 -Wall -Werror main.c -o main
+        clang -O2 -g -std=c11 -Wall -Werror main.c -o main
         gdb main
         ;;
     "clean")

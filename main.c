@@ -10,10 +10,10 @@ typedef struct Server {
 } Server;
 
 typedef enum Method {
-    GET,
-    PUT,
-    POST,
-    DELETE
+    METHOD_GET,
+    METHOD_PUT,
+    METHOD_POST,
+    METHOD_DELETE
 } Method;
 
 typedef struct Lexer {
@@ -25,7 +25,6 @@ typedef struct Lexer {
     char current_char;
 } Lexer;
 
-// Headers
 typedef struct Header {
     String field_name;
     String field_value;
@@ -44,6 +43,7 @@ typedef struct Request {
     String uri;
     String version;
     Headers_Map headers_map;
+    u8 *body;
 } Request;
 
 static void init_headers_map(Headers_Map *headers_map) {
@@ -69,7 +69,7 @@ static void headers_put(Headers_Map *headers_map, String field_name, String fiel
 
     u32 header_index = header_hash(field_name) % headers_cap; 
     Header *headers = headers_map->headers;
-    Header *header = &headers[header_index];
+    Header *header = headers + header_index;
 
     bool is_occupied = header->occupied;
     bool different_field_name = !string_eq(&header->field_name, &field_name); 
@@ -101,36 +101,36 @@ static void headers_put(Headers_Map *headers_map, String field_name, String fiel
     headers_map->length++;
 }
 
-// static String *headers_get(Headers_Map *headers_map, String field_name) {
-//     u32 headers_cap = headers_map->capacity;
-//     u32 header_index = header_hash(field_name) % headers_cap; 
-//
-//     Header *headers = headers_map->headers;
-//     Header *header = &headers[header_index];
-//
-//     if (string_eq(&header->field_name, &field_name)) {
-//         return &header->field_value;
-//     }
-//
-//     u32 iterations = 0;
-//
-//     while (iterations < headers_cap && header->occupied) {
-//         iterations++;
-//
-//         header_index++;
-//         if (header_index >= headers_cap) {
-//             header_index = 0;
-//         }
-//
-//         // comparar compilado
-//         header = &headers[header_index];
-//         if (string_eq(&header->field_name, &field_name)) {
-//             return &header->field_value;
-//         }
-//     }
-//
-//     return NULL;
-// }
+static String *headers_get(Headers_Map *headers_map, String field_name) {
+    u32 headers_cap = headers_map->capacity;
+    u32 header_index = header_hash(field_name) % headers_cap; 
+
+    Header *headers = headers_map->headers;
+    Header *header = headers + header_index;
+
+    if (string_eq(&header->field_name, &field_name)) {
+        return &header->field_value;
+    }
+
+    u32 iterations = 0;
+
+    while (iterations < headers_cap && header->occupied) {
+        iterations++;
+
+        header_index++;
+        if (header_index >= headers_cap) {
+            header_index = 0;
+        }
+
+        // comparar compilado
+        header = &headers[header_index];
+        if (string_eq(&header->field_name, &field_name)) {
+            return &header->field_value;
+        }
+    }
+
+    return NULL;
+}
 
 static void init_lexer(Lexer *lexer, char *buf, u32 capacity) {
     lexer->buf = buf;
@@ -170,15 +170,15 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
     request->version = string("HTTP/1.1");
 
     // Method
-    String method_str = string_sub(allocator, lexer->buf, 0, lexer->buf_position - 1);
+    String method_str = string_sub_cstr(allocator, lexer->buf, 0, lexer->buf_position - 1);
     if (string_eq_cstr(&method_str, "GET")) {
-        request->method = GET;
+        request->method = METHOD_GET;
     } else if (string_eq_cstr(&method_str, "PUT")) {
-        request->method = PUT;
+        request->method = METHOD_PUT;
     } else if (string_eq_cstr(&method_str, "POST")) {
-        request->method = POST;
+        request->method = METHOD_POST;
     } else if (string_eq_cstr(&method_str, "DELETE")) {
-        request->method = DELETE;
+        request->method = METHOD_DELETE;
     } else {
         // TODO: responder un mensaje de error
         assert(false && "el Method no existe");
@@ -202,7 +202,7 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
         assert(false && "la uri esta vacia");
     }
 
-    request->uri = string_sub(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
+    request->uri = string_sub_cstr(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
 
     // Space
     if (lexer->current_char != ' ') {
@@ -261,7 +261,11 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
         }
         
         if (lexer->current_char == ':') {
-            String field_name = string_sub(allocator, lexer->buf, field_name_start, lexer->buf_position - 1);
+
+            // substring to lower case
+            u32 field_name_size = (lexer->read_position - 1) - field_name_start;
+            String substring = string_with_len(&lexer->buf[field_name_start], field_name_size); 
+            String field_name = string_to_lower(allocator, substring);
 
             // espacio
             read_char(lexer);
@@ -279,9 +283,7 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
 
             field_value_end = lexer->read_position - 1;
 
-            String field_value = string_sub(allocator, lexer->buf, field_value_start, field_value_end);
-            // printf("%.*s: %.*s\n", string_print(field_name), string_print(field_value));
-
+            String field_value = string_sub_cstr(allocator, lexer->buf, field_value_start, field_value_end);
             headers_put(&request->headers_map, field_name, field_value);
 
             // \r\n
@@ -298,6 +300,10 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
     if (lexer->current_char != '\n') {
         assert(0 && "headers tienen que terminar con el \\n");
     }
+}
+
+static void parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
+    // creo que es todo el resto hasta el final
 }
 
 int main(int argc, char *argv[]) {
@@ -392,6 +398,11 @@ int main(int argc, char *argv[]) {
 
             parse_request_line(&allocator, &lexer, &request);
             parse_headers(&allocator, &lexer, &request);
+
+            String *content_len = headers_get(&request.headers_map, string("content-length"));
+            printf("Este es el valor del header 'content-lenght': %.*s\n", string_print((*content_len)));
+
+            parse_body(&allocator, &lexer, &request);
 
             printf("cantidad alocada: %d\n", allocator.size);
         }
