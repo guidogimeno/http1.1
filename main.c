@@ -302,10 +302,46 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
 }
 
 static void parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
-    // creo que es todo el resto hasta el final
+    String *content_length = headers_get(&request->headers_map, string("content-length"));
+    if (content_length != NULL) {
+        printf("Este es el valor del header 'content-lenght': %.*s\n", string_print((*content_length)));
+        // s64 bytes = string_to_int(*content_length);
+    }
 }
 
 int main(int argc, char *argv[]) {
+
+    String use_cases[17] = {
+        string("   1"),
+        string("   1 "),
+        string("   -1 "),
+        string("   -0001 "),
+        string("   -11234 "),
+        string("   11204 "),
+        string("01"),
+        string("00004"),
+        string("40000"),
+        string("0000"),
+        string("00300"),
+        string("-00300"),
+        string(" -00304 "),
+        string("9223372036854775807"),
+        string("-9223372036854775808"),
+        string("9223372036854775808"),
+        string("-9223372036854775809")
+    };
+
+    for (u32 i = 0; i < 17; i++) {
+        String str = use_cases[i];
+        printf("input: %.*s -> ", string_print(str));
+        s64 result = string_to_int(str);
+        printf("resultado: %ld\n", result);
+    }
+
+
+
+
+
     printf("iniciando servidor..\n");
 
     u32 allocator_capacity = 1024 * 1024;
@@ -397,10 +433,6 @@ int main(int argc, char *argv[]) {
 
             parse_request_line(&allocator, &lexer, &request);
             parse_headers(&allocator, &lexer, &request);
-
-            String *content_len = headers_get(&request.headers_map, string("content-length"));
-            printf("Este es el valor del header 'content-lenght': %.*s\n", string_print((*content_len)));
-
             parse_body(&allocator, &lexer, &request);
 
             printf("cantidad alocada: %d\n", allocator.size);

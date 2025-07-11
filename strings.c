@@ -153,6 +153,48 @@ String string_to_upper(Allocator *a, String str) {
     return new_str;
 }
 
+s64 string_to_int(String str) {
+    u32 i = 0;
+    while (str.data[i] == ' ') { i++; };
+
+    s32 sign;
+    if (str.data[i] == '-') {
+        sign = -1;
+        i++;
+    } else {
+        sign = 1;
+    }
+
+    s64 result = 0;
+    while (i < str.size) { 
+        char c = str.data[i];
+
+        u32 num;
+        if (c >= '0' && c <= '9') {
+            num = c - '0';
+        } else if (c == ' ') {
+            return result * sign;
+        } else {
+            return 0; // error
+        }
+
+        u32 to_add = (result * 10) + num;
+        // TODO: aca esto esta mal
+        if (sign == 1 && to_add > (0x7fffffffffffffff - result)) {
+            return 0;
+        }
+        if (sign == -1 && to_add > (0xffffffffffffffff - result) {
+            return 0;
+        }
+
+        result = (result * 10) + num;
+
+        i++;
+    }
+    
+    return result * sign;
+}
+
 char char_to_lower(char c) {
     if (c >= 'A' && c <= 'Z') {
         return 'a' + (c - 'A');
