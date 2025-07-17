@@ -155,7 +155,6 @@ String string_to_upper(Allocator *a, String str) {
 
 s64 string_to_int(String str) {
     u32 i = 0;
-    while (str.data[i] == ' ') { i++; };
 
     s32 sign;
     if (str.data[i] == '-') {
@@ -178,21 +177,61 @@ s64 string_to_int(String str) {
             return 0; // error
         }
 
-        u32 to_add = (result * 10) + num;
-        // TODO: aca esto esta mal
-        if (sign == 1 && to_add > (0x7fffffffffffffff - result)) {
-            return 0;
-        }
-        if (sign == -1 && to_add > (0xffffffffffffffff - result) {
-            return 0;
+        // validar overflow
+        if (sign == 1) {
+            if (result > INT64_MAX / 10 || 
+                (result == INT64_MAX / 10 && num > INT64_MAX % 10)) {
+                return 0; // overflow
+            }
+        } else {
+            if (result > -(INT64_MIN / 10) || 
+                (result == -(INT64_MIN / 10) && num > -(INT64_MIN % 10))) {
+                return 0; // overflow
+            }
         }
 
-        result = (result * 10) + num;
+        result = result * 10 + num;
 
         i++;
     }
     
     return result * sign;
+}
+
+String string_from_int(Allocator *allocator, s64 num) {
+    s64 temp = num;
+
+    u32 length = 1;
+    while (temp != 0) {
+        temp /= 10;
+        length++;
+    }
+
+    char *buf = (char *)alloc(allocator, length);
+
+    if (num < 0) {
+        buf[0] = '-';
+        length++;
+    }
+
+    temp = num;
+    u32 i = length - 1;
+    while (temp != 0) {
+        s64 num_int = (s64)(temp / 10);
+        u32 num_rest = temp % 10;
+        temp = num_int;
+
+        buf[i] = '0' + num_rest;
+
+        i--;
+    }
+
+    String str = {
+        .data = buf,
+        .size = length
+    };
+
+    return str;
 }
 
 char char_to_lower(char c) {
@@ -208,3 +247,45 @@ char char_to_upper(char c) {
     }
     return c;
 }
+
+
+void sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity) {
+    builder->length = 0;
+    builder->capacity = capacity;
+    builder->allocator = allocator;
+
+    if (capacity > 0) {
+        builder->data = alloc(allocator, capacity);
+    }
+}
+
+void sbuilder_init(String_Builder *builder, Allocator *allocator) {
+    sbuilder_init_cap(builder, allocator, STRING_BUILDER_DEFAULT_CAPACITY);
+}
+
+void sbuilder_append(String_Builder *builder, String str) {
+    u32 total_length = builder->length + str.size;
+
+    if (total_length >= builder->capacity) {
+        u32 new_capacity = total_length * 2;
+        u8 *new_data = alloc(builder->allocator, new_capacity);
+
+        memcpy(new_data, builder->data, builder->length);
+
+        builder->data = new_data;
+        builder->capacity = new_capacity;
+    }
+
+    memcpy(builder->data + builder->length, str.data, str.size);
+
+    builder->length = total_length;
+}
+
+String sbuilder_to_string(String_Builder *sb) {
+    String str = {
+        .data = (char *)sb->data,
+        .size = sb->length,
+    };
+    return str;
+}
+

@@ -9,22 +9,6 @@ typedef struct Server {
     u32 clients[1];
 } Server;
 
-typedef enum Method {
-    METHOD_GET,
-    METHOD_PUT,
-    METHOD_POST,
-    METHOD_DELETE
-} Method;
-
-typedef struct Lexer {
-    char *buf;
-    u32 capacity;
-    u32 size;
-    u32 buf_position;
-    u32 read_position;
-    char current_char;
-} Lexer;
-
 typedef struct Header {
     String field_name;
     String field_value;
@@ -37,14 +21,6 @@ typedef struct Headers_Map {
     u32 length;
     u32 capacity;
 } Headers_Map;
-
-typedef struct Request {
-    Method method;
-    String uri;
-    String version;
-    Headers_Map headers_map;
-    u8 *body;
-} Request;
 
 static void init_headers_map(Headers_Map *headers_map) {
     headers_map->length = 0;
@@ -131,7 +107,50 @@ static String *headers_get(Headers_Map *headers_map, String field_name) {
     return NULL;
 }
 
-static void init_lexer(Lexer *lexer, char *buf, u32 capacity) {
+typedef enum Method {
+    METHOD_GET,
+    METHOD_PUT,
+    METHOD_POST,
+    METHOD_DELETE
+} Method;
+
+typedef struct Body {
+    u8 *data;
+    u32 length;
+} Body;
+
+typedef struct Request {
+    Method method;
+    String uri;
+    String version;
+    Headers_Map headers_map;
+    Body body;
+} Request;
+
+typedef struct Response {
+    u8 status;
+    Headers_Map headers_map;
+    Body body;
+} Response;
+
+// static char *encode_response(Allocator *allocator, Response response) {
+//     String_Builder builder;
+//     sbuilder_init(&builder, allocator);
+//     sbuilder_append(&builder, string("HTTP/1.1 "));
+//     // sbuilder_append(&builder, response.status);
+//     return sbuilder_to_string(&builder).data;
+// }
+
+typedef struct Lexer {
+    u8 *buf;
+    u32 capacity;
+    u32 size;
+    u32 buf_position;
+    u32 read_position;
+    char current_char;
+} Lexer;
+
+static void init_lexer(Lexer *lexer, u8 *buf, u32 capacity) {
     lexer->buf = buf;
     lexer->capacity = capacity; // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
     lexer->size = 0; 
@@ -169,7 +188,7 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
     request->version = string("HTTP/1.1");
 
     // Method
-    String method_str = string_sub_cstr(allocator, lexer->buf, 0, lexer->buf_position - 1);
+    String method_str = string_sub_cstr(allocator, (char *)lexer->buf, 0, lexer->buf_position - 1);
     if (string_eq_cstr(&method_str, "GET")) {
         request->method = METHOD_GET;
     } else if (string_eq_cstr(&method_str, "PUT")) {
@@ -201,7 +220,7 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
         assert(false && "la uri esta vacia");
     }
 
-    request->uri = string_sub_cstr(allocator, lexer->buf, uri_start, lexer->buf_position - 1);
+    request->uri = string_sub_cstr(allocator, (char *)lexer->buf, uri_start, lexer->buf_position - 1);
 
     // Space
     if (lexer->current_char != ' ') {
@@ -228,16 +247,11 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
         // TODO: responder un mensaje de error
         assert(false && "el request-line tiene que terminar con \\n");
     }
-
-    printf(
-        "Resultado -> Method=%d URI=%.*s Version:%.*s\n",
-        request->method,
-        string_print(request->uri),
-        string_print(request->version)
-    );
 }
 
 static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) {
+    printf("totalidad: %s\n", lexer->buf);
+
     do {
         u32 field_name_start = lexer->read_position;
 
@@ -263,7 +277,7 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
 
             // substring to lower case
             u32 field_name_size = (lexer->read_position - 1) - field_name_start;
-            String substring = string_with_len(&lexer->buf[field_name_start], field_name_size); 
+            String substring = string_with_len((char *)&lexer->buf[field_name_start], field_name_size); 
             String field_name = string_to_lower(allocator, substring);
 
             // espacio
@@ -280,9 +294,8 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
                 read_char(lexer);
             } while (lexer->current_char != '\r');
 
-            field_value_end = lexer->read_position - 1;
-
-            String field_value = string_sub_cstr(allocator, lexer->buf, field_value_start, field_value_end);
+            field_value_end = lexer->buf_position - 1;
+            String field_value = string_sub_cstr(allocator, (char *)lexer->buf, field_value_start, field_value_end);
             headers_put(&request->headers_map, field_name, field_value);
 
             // \r\n
@@ -304,44 +317,13 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
 static void parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
     String *content_length = headers_get(&request->headers_map, string("content-length"));
     if (content_length != NULL) {
-        printf("Este es el valor del header 'content-lenght': %.*s\n", string_print((*content_length)));
-        // s64 bytes = string_to_int(*content_length);
+        s64 len = string_to_int(*content_length);
+        request->body.length = len;
+        request->body.data = &lexer->buf[lexer->read_position];
     }
 }
 
 int main(int argc, char *argv[]) {
-
-    String use_cases[17] = {
-        string("   1"),
-        string("   1 "),
-        string("   -1 "),
-        string("   -0001 "),
-        string("   -11234 "),
-        string("   11204 "),
-        string("01"),
-        string("00004"),
-        string("40000"),
-        string("0000"),
-        string("00300"),
-        string("-00300"),
-        string(" -00304 "),
-        string("9223372036854775807"),
-        string("-9223372036854775808"),
-        string("9223372036854775808"),
-        string("-9223372036854775809")
-    };
-
-    for (u32 i = 0; i < 17; i++) {
-        String str = use_cases[i];
-        printf("input: %.*s -> ", string_print(str));
-        s64 result = string_to_int(str);
-        printf("resultado: %ld\n", result);
-    }
-
-
-
-
-
     printf("iniciando servidor..\n");
 
     u32 allocator_capacity = 1024 * 1024;
@@ -350,7 +332,16 @@ int main(int argc, char *argv[]) {
         .capacity = allocator_capacity,
         .size = 0,
     };
-    
+
+    String str = string_from_int(&allocator, 1234);
+    printf("resultado: %.*s\n", string_print(str));
+
+    str = string_from_int(&allocator, 0);
+    printf("resultado: %.*s\n", string_print(str));
+
+    str = string_from_int(&allocator, -1234);
+    printf("resultado: %.*s\n", string_print(str));
+
     // creacion del socket
     u32 sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
@@ -410,7 +401,7 @@ int main(int argc, char *argv[]) {
         u16 port = ntohs(client_addr.sin_port);
         printf("nuevo cliente aceptado: %s:%d\n", host, port);
     
-        char buf[1024];
+        u8 buf[1024];
         Lexer lexer = {0};
         init_lexer(&lexer, buf, 1024);
     
@@ -431,11 +422,36 @@ int main(int argc, char *argv[]) {
             Request request = {0};
             request.headers_map = headers_map;
 
+            // TODO: alocar memoria temporal
             parse_request_line(&allocator, &lexer, &request);
             parse_headers(&allocator, &lexer, &request);
             parse_body(&allocator, &lexer, &request);
 
-            printf("cantidad alocada: %d\n", allocator.size);
+            // Resumen
+            printf("Method: %d\n", request.method);
+            printf("URI: %.*s\n", string_print(request.uri));
+            printf("Version: %.*s\n", string_print(request.version));
+            printf("Headers:\n");
+            for (u32 i = 0; i < request.headers_map.capacity; i++) {
+                Header header = request.headers_map.headers[i];
+                if (header.occupied) {
+                    printf("  %.*s: %.*s\n", string_print(header.field_name), string_print(header.field_value));
+                }
+            }
+            printf("Body: %.*s\n", request.body.length, request.body.data);
+            printf("Bytes alocados: %d\n", allocator.size);
+
+            // Handler
+
+            // Respuesta
+            char *response = "hola que acelga";
+            u32 bytes_to_write = 10;
+            u32 bytes_written = write(client_fd, response, bytes_to_write);
+            if (bytes_written != bytes_to_write) {
+                perror("error al escribir al cliente");
+            }
+            
+            // TODO: desalocar memoria temporal
         }
     
         if (close(client_fd) == -1) {
