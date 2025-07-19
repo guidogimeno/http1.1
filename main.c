@@ -128,18 +128,70 @@ typedef struct Request {
 } Request;
 
 typedef struct Response {
-    u8 status;
+    u16 status;
     Headers_Map headers_map;
     Body body;
 } Response;
 
-// static char *encode_response(Allocator *allocator, Response response) {
-//     String_Builder builder;
-//     sbuilder_init(&builder, allocator);
-//     sbuilder_append(&builder, string("HTTP/1.1 "));
-//     // sbuilder_append(&builder, response.status);
-//     return sbuilder_to_string(&builder).data;
-// }
+static String http_status_description(u16 status) {
+    switch (status) {
+        case 200: return string("Ok");
+        case 201: return string("Created");
+        default: return string("Unknown");
+    }
+}
+
+static String encode_response(Allocator *allocator, Response response) {
+    String line_separator = string("\r\n");
+    String colon_separator = string(": ");
+    String space_separator = string(" ");
+
+    String version = string("HTTP/1.1 ");
+    String status = string_from_int(allocator, response.status);
+    String status_description = http_status_description(response.status);
+    String body = string_with_len((char *)response.body.data, response.body.length);
+
+    // calculo de capacidad
+    u32 response_minimum_size = version.size +
+        status.size +
+        status_description.size +
+        body.size +
+        1 + 2 + 2; // space + first line \r\n + headers \r\n
+
+    for (u32 i = 0; i < MAX_HEADERS_CAPACITY; i++) {
+        Header header = response.headers_map.headers[i];
+        if (header.occupied) {
+            // + 4 por colon + salto de linea (2 c/u)
+            response_minimum_size += header.field_name.size + header.field_value.size + 4;
+        }
+    }
+
+    String_Builder builder = {0};
+    sbuilder_init_cap(&builder, allocator, response_minimum_size);
+    sbuilder_append(&builder, version);
+    sbuilder_append(&builder, status);
+    sbuilder_append(&builder, space_separator);
+    sbuilder_append(&builder, status_description);
+    sbuilder_append(&builder, line_separator);
+
+    for (u32 i = 0; i < MAX_HEADERS_CAPACITY; i++) {
+        Header header = response.headers_map.headers[i];
+        if (header.occupied) {
+            sbuilder_append(&builder, header.field_name);
+            sbuilder_append(&builder, colon_separator);
+            sbuilder_append(&builder, header.field_value);
+            sbuilder_append(&builder, line_separator);
+        }
+    }
+
+    sbuilder_append(&builder, line_separator);
+
+    if (response.body.length > 0) {
+        sbuilder_append(&builder, body);
+    }
+
+    return sbuilder_to_string(&builder);
+}
 
 typedef struct Lexer {
     u8 *buf;
@@ -250,8 +302,6 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
 }
 
 static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) {
-    printf("totalidad: %s\n", lexer->buf);
-
     do {
         u32 field_name_start = lexer->read_position;
 
@@ -333,15 +383,6 @@ int main(int argc, char *argv[]) {
         .size = 0,
     };
 
-    String str = string_from_int(&allocator, 1234);
-    printf("resultado: %.*s\n", string_print(str));
-
-    str = string_from_int(&allocator, 0);
-    printf("resultado: %.*s\n", string_print(str));
-
-    str = string_from_int(&allocator, -1234);
-    printf("resultado: %.*s\n", string_print(str));
-
     // creacion del socket
     u32 sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
@@ -416,7 +457,7 @@ int main(int argc, char *argv[]) {
             }
             lexer.size = bytes_read - 1;
     
-            Headers_Map headers_map;
+            Headers_Map headers_map = {0};
             init_headers_map(&headers_map);
 
             Request request = {0};
@@ -442,14 +483,32 @@ int main(int argc, char *argv[]) {
             printf("Bytes alocados: %d\n", allocator.size);
 
             // Handler
+            String body_str = string("");
+            Body body = {
+                .data = (u8 *)body_str.data,
+                .length = body_str.size,
+            };
+
+            String content_length = string_from_int(&allocator, body.length);
+            Headers_Map response_headers = {0};
+            init_headers_map(&response_headers);
+            headers_put(&response_headers, string("content-length"), content_length);
+
+            Response response = {
+                .status = 200,
+                .headers_map = response_headers,
+                .body = body,
+            };
+            String encoded_response = encode_response(&allocator, response);
+            printf("respuesta: %.*s\n", string_print(encoded_response));
 
             // Respuesta
-            char *response = "hola que acelga";
-            u32 bytes_to_write = 10;
-            u32 bytes_written = write(client_fd, response, bytes_to_write);
-            if (bytes_written != bytes_to_write) {
+            u32 bytes_written = write(client_fd, encoded_response.data, encoded_response.size);
+            if (bytes_written != encoded_response.size) {
                 perror("error al escribir al cliente");
             }
+
+            printf("ya le escribi...\n");
             
             // TODO: desalocar memoria temporal
         }

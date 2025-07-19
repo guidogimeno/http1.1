@@ -199,38 +199,94 @@ s64 string_to_int(String str) {
 }
 
 String string_from_int(Allocator *allocator, s64 num) {
-    s64 temp = num;
+    static const u64 powers_of_10[] = {
+        1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL,
+        10000000ULL, 100000000ULL, 1000000000ULL, 10000000000ULL,
+        100000000000ULL, 1000000000000ULL, 10000000000000ULL,
+        100000000000000ULL, 1000000000000000ULL, 10000000000000000ULL,
+        100000000000000000ULL, 1000000000000000000ULL, 10000000000000000000ULL
+    };
 
-    u32 length = 1;
-    while (temp != 0) {
-        temp /= 10;
-        length++;
+    static const u8 digit_counts[] = {1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
+
+    static const char two_digit_table[100][2] = {
+        {'0', '0'}, {'0', '1'}, {'0', '2'}, {'0', '3'}, {'0', '4'}, {'0', '5'},
+        {'0', '6'}, {'0', '7'}, {'0', '8'}, {'0', '9'}, {'1', '0'}, {'1', '1'},
+        {'1', '2'}, {'1', '3'}, {'1', '4'}, {'1', '5'}, {'1', '6'}, {'1', '7'}, 
+        {'1', '8'}, {'1', '9'}, {'2', '0'}, {'2', '1'}, {'2', '2'}, {'2', '3'},
+        {'2', '4'}, {'2', '5'}, {'2', '6'}, {'2', '7'}, {'2', '8'}, {'2', '9'},
+        {'3', '0'}, {'3', '1'}, {'3', '2'}, {'3', '3'}, {'3', '4'}, {'3', '5'}, 
+        {'3', '6'}, {'3', '7'}, {'3', '8'}, {'3', '9'}, {'4', '0'}, {'4', '1'}, 
+        {'4', '2'}, {'4', '3'}, {'4', '4'}, {'4', '5'}, {'4', '6'}, {'4', '7'},
+        {'4', '8'}, {'4', '9'}, {'5', '0'}, {'5', '1'}, {'5', '2'}, {'5', '3'},
+        {'5', '4'}, {'5', '5'}, {'5', '6'}, {'5', '7'}, {'5', '8'}, {'5', '9'},
+        {'6', '0'}, {'6', '1'}, {'6', '2'}, {'6', '3'}, {'6', '4'}, {'6', '5'},
+        {'6', '6'}, {'6', '7'}, {'6', '8'}, {'6', '9'}, {'7', '0'}, {'7', '1'},
+        {'7', '2'}, {'7', '3'}, {'7', '4'}, {'7', '5'}, {'7', '6'}, {'7', '7'},
+        {'7', '8'}, {'7', '9'}, {'8', '0'}, {'8', '1'}, {'8', '2'}, {'8', '3'},
+        {'8', '4'}, {'8', '5'}, {'8', '6'}, {'8', '7'}, {'8', '8'}, {'8', '9'},
+        {'9', '0'}, {'9', '1'}, {'9', '2'}, {'9', '3'}, {'9', '4'}, {'9', '5'},
+        {'9', '6'}, {'9', '7'}, {'9', '8'}, {'9', '9'}
+    };
+
+    static const char int64_min_str[] = "-9223372036854775808";
+    static const char int64_max_str[] = "9223372036854775807";
+
+    if (num == 0) {
+        char *buf = (char *)alloc(allocator, 1);
+        buf[0] = '0';
+        String str = { .data = buf, .size = 1 };
+        return str;
+    }
+    if (num == INT64_MIN) {
+        char *buf = (char *)alloc(allocator, 20);
+        for (int i = 0; i < 20; i++) buf[i] = int64_min_str[i];
+        String str = { .data = buf, .size = 20 };
+        return str;
+    }
+    if (num == INT64_MAX) {
+        char *buf = (char *)alloc(allocator, 19);
+        for (int i = 0; i < 19; i++) buf[i] = int64_max_str[i];
+        String str = { .data = buf, .size = 19 };
+        return str;
+    }
+
+    bool is_negative = num < 0;
+    u64 abs_num = (u64)llabs(num);
+    u32 length = is_negative ? 1 : 0;
+    for (u32 i = 0; i < 20; i++) {
+        if (abs_num < powers_of_10[i]) {
+            length += digit_counts[i];
+            break;
+        }
     }
 
     char *buf = (char *)alloc(allocator, length);
-
-    if (num < 0) {
-        buf[0] = '-';
-        length++;
-    }
-
-    temp = num;
     u32 i = length - 1;
-    while (temp != 0) {
-        s64 num_int = (s64)(temp / 10);
-        u32 num_rest = temp % 10;
-        temp = num_int;
 
-        buf[i] = '0' + num_rest;
-
-        i--;
+    while (abs_num >= 100) {
+        u32 pair = abs_num % 100;
+        abs_num /= 100;
+        buf[i] = two_digit_table[pair][1];
+        buf[i - 1] = two_digit_table[pair][0];
+        i -= 2;
     }
 
-    String str = {
-        .data = buf,
-        .size = length
-    };
+    if (abs_num > 0) {
+        if (abs_num < 10) {
+            buf[i] = '0' + (char)abs_num;
+        } else {
+            buf[i] = two_digit_table[abs_num][1];
+            buf[i - 1] = two_digit_table[abs_num][0];
+            i--;
+        }
+    }
 
+    if (is_negative) {
+        buf[0] = '-';
+    }
+
+    String str = { .data = buf, .size = length };
     return str;
 }
 
@@ -266,14 +322,17 @@ void sbuilder_init(String_Builder *builder, Allocator *allocator) {
 void sbuilder_append(String_Builder *builder, String str) {
     u32 total_length = builder->length + str.size;
 
-    if (total_length >= builder->capacity) {
+    if (total_length > builder->capacity) {
         u32 new_capacity = total_length * 2;
+        printf("realocacion - capacidad anterior: %d capacidad nueva: %d\n", builder->capacity, new_capacity);
+
         u8 *new_data = alloc(builder->allocator, new_capacity);
 
         memcpy(new_data, builder->data, builder->length);
 
         builder->data = new_data;
         builder->capacity = new_capacity;
+
     }
 
     memcpy(builder->data + builder->length, str.data, str.size);
