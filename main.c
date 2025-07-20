@@ -129,11 +129,11 @@ typedef struct Request {
 
 typedef struct Response {
     u16 status;
-    Headers_Map headers_map;
+    Headers_Map headers;
     Body body;
 } Response;
 
-static String http_status_description(u16 status) {
+static String http_status_reason(u16 status) {
     switch (status) {
         case 200: return string("Ok");
         case 201: return string("Created");
@@ -148,7 +148,7 @@ static String encode_response(Allocator *allocator, Response response) {
 
     String version = string("HTTP/1.1 ");
     String status = string_from_int(allocator, response.status);
-    String status_description = http_status_description(response.status);
+    String status_description = http_status_reason(response.status);
     String body = string_with_len((char *)response.body.data, response.body.length);
 
     // calculo de capacidad
@@ -159,7 +159,7 @@ static String encode_response(Allocator *allocator, Response response) {
         1 + 2 + 2; // space + first line \r\n + headers \r\n
 
     for (u32 i = 0; i < MAX_HEADERS_CAPACITY; i++) {
-        Header header = response.headers_map.headers[i];
+        Header header = response.headers.headers[i];
         if (header.occupied) {
             // + 4 por colon + salto de linea (2 c/u)
             response_minimum_size += header.field_name.size + header.field_value.size + 4;
@@ -175,7 +175,7 @@ static String encode_response(Allocator *allocator, Response response) {
     sbuilder_append(&builder, line_separator);
 
     for (u32 i = 0; i < MAX_HEADERS_CAPACITY; i++) {
-        Header header = response.headers_map.headers[i];
+        Header header = response.headers.headers[i];
         if (header.occupied) {
             sbuilder_append(&builder, header.field_name);
             sbuilder_append(&builder, colon_separator);
@@ -191,6 +191,21 @@ static String encode_response(Allocator *allocator, Response response) {
     }
 
     return sbuilder_to_string(&builder);
+}
+
+static void response_write(Allocator *allocator, Response *response, u8 *content, u32 length) {
+    headers_put(&response->headers, string("content-length"), string_from_int(allocator, length));
+
+    response->body.data = content;
+    response->body.length = length;
+}
+
+static void http_handler(Allocator *allocator, Request req, Response *res) {
+    res->status = 200;
+
+    String body = string("hola como estas\n");
+
+    response_write(allocator, res, (u8 *)body.data, body.size);
 }
 
 typedef struct Lexer {
@@ -468,37 +483,12 @@ int main(int argc, char *argv[]) {
             parse_headers(&allocator, &lexer, &request);
             parse_body(&allocator, &lexer, &request);
 
-            // Resumen
-            printf("Method: %d\n", request.method);
-            printf("URI: %.*s\n", string_print(request.uri));
-            printf("Version: %.*s\n", string_print(request.version));
-            printf("Headers:\n");
-            for (u32 i = 0; i < request.headers_map.capacity; i++) {
-                Header header = request.headers_map.headers[i];
-                if (header.occupied) {
-                    printf("  %.*s: %.*s\n", string_print(header.field_name), string_print(header.field_value));
-                }
-            }
-            printf("Body: %.*s\n", request.body.length, request.body.data);
-            printf("Bytes alocados: %d\n", allocator.size);
-
             // Handler
-            String body_str = string("");
-            Body body = {
-                .data = (u8 *)body_str.data,
-                .length = body_str.size,
-            };
+            Response response = {0};
+            init_headers_map(&response.headers);
 
-            String content_length = string_from_int(&allocator, body.length);
-            Headers_Map response_headers = {0};
-            init_headers_map(&response_headers);
-            headers_put(&response_headers, string("content-length"), content_length);
+            http_handler(&allocator, request, &response);
 
-            Response response = {
-                .status = 200,
-                .headers_map = response_headers,
-                .body = body,
-            };
             String encoded_response = encode_response(&allocator, response);
             printf("respuesta: %.*s\n", string_print(encoded_response));
 
