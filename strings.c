@@ -1,8 +1,8 @@
-String string(char const *text) {
+String string(const char *text) {
     return string_with_len(text, string_size(text));
 }
 
-String string_with_len(char const *text, u32 len) {
+String string_with_len(const char *text, u32 len) {
     String str = {
         .data = text,
         .size = len,
@@ -10,7 +10,7 @@ String string_with_len(char const *text, u32 len) {
     return str;
 }
 
-u32 string_size(char const *text) {
+u32 string_size(const char *text) {
     if (text == NULL) return 0;
 
     u32 i = 0;

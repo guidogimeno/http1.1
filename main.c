@@ -15,7 +15,7 @@ typedef struct Header {
     bool occupied;
 } Header;
 
-#define MAX_HEADERS_CAPACITY 16 // osea que solo acepta hastas 12 headers
+#define MAX_HEADERS_CAPACITY 32 // osea que solo acepta hastas 12 headers
 typedef struct Headers_Map {
     Header headers[MAX_HEADERS_CAPACITY];
     u32 length;
@@ -41,6 +41,7 @@ static u32 header_hash(String s) {
 static void headers_put(Headers_Map *headers_map, String field_name, String field_value) {
     u32 headers_cap = headers_map->capacity;
 
+    // TODO: Esto deberia crecer
     assert(headers_map->length < (0.75 * headers_cap));
 
     u32 header_index = header_hash(field_name) % headers_cap; 
@@ -137,6 +138,7 @@ static String http_status_reason(u16 status) {
     switch (status) {
         case 200: return string("Ok");
         case 201: return string("Created");
+        case 400: return string("Bad Request");
         default: return string("Unknown");
     }
 }
@@ -201,10 +203,10 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
 }
 
 static void http_handler(Allocator *allocator, Request req, Response *res) {
-    res->status = 200;
 
     String body = string("hola como estas\n");
 
+    res->status = 200;
     response_write(allocator, res, (u8 *)body.data, body.size);
 }
 
@@ -247,7 +249,35 @@ static void read_char(Lexer *lexer) {
     lexer->read_position++;
 }
 
-static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *request) {
+typedef enum Parse_Error {
+    PARSE_ERROR_NO_ERROR,
+
+    // request line errors
+    PARSE_ERROR_MALFORMED_REQUEST_LINE,
+    PARSE_ERROR_INVALID_METHOD,
+    PARSE_ERROR_INVALID_URI,
+    PARSE_ERROR_INVALID_VERSION,
+
+    // headers errors
+    PARSE_ERROR_MALFORMED_HEADER,
+
+    PARSE_ERROR_COUNT
+} Parse_Error;
+
+static const char *parse_error_messages[PARSE_ERROR_COUNT + 1] = {
+    "",
+
+    "parse_error_malformed_request_line",
+    "parse_error_invalid_method",
+    "parse_error_invalid_uri",
+    "parse_error_invalid_version",
+
+    "parse_error_malformed_header",
+
+    "count"
+};
+
+static Parse_Error parse_request_line(Allocator *allocator, Lexer *lexer, Request *request) {
     do {
         read_char(lexer);
     } while (is_letter(lexer->current_char));
@@ -265,15 +295,12 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
     } else if (string_eq_cstr(&method_str, "DELETE")) {
         request->method = METHOD_DELETE;
     } else {
-        // TODO: responder un mensaje de error
-        assert(false && "el Method no existe");
-        return;
+        return PARSE_ERROR_INVALID_METHOD;
     }
 
     // Space
     if (lexer->current_char != ' ') {
-        // TODO: responder un mensaje de error
-        assert(false && "tiene que haber un espacio entre el method y la uri");
+        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
     }
 
     // URI
@@ -283,40 +310,37 @@ static void parse_request_line(Allocator *allocator, Lexer *lexer, Request *requ
     } while(is_alphanum(lexer->current_char) || lexer->current_char == '/');
 
     if (lexer->buf_position == uri_start) {
-        // TODO: responder un mensaje de error porque no puede ser vacio
-        assert(false && "la uri esta vacia");
+        return PARSE_ERROR_INVALID_URI;
     }
 
     request->uri = string_sub_cstr(allocator, (char *)lexer->buf, uri_start, lexer->buf_position - 1);
 
     // Space
     if (lexer->current_char != ' ') {
-        // TODO: responder un mensaje de error
-        assert(false && "tiene que haber un espacio entre la uri y la version");
+        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
     }
 
     for (u32 i = 0; i < 8; i++) { // len(HTTP/1.1)
         read_char(lexer);
         if (request->version.data[i] != lexer->current_char) {
-            // TODO: responder un mensaje de error
-            assert(false && "la version no coincide");
+            return PARSE_ERROR_INVALID_VERSION;
         }
     }
 
     read_char(lexer);
     if (lexer->current_char != '\r') {
-        // TODO: responder un mensaje de error
-        assert(false && "el request-line tiene que terminar con \\r");
+        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
     }
 
     read_char(lexer);
     if (lexer->current_char != '\n') {
-        // TODO: responder un mensaje de error
-        assert(false && "el request-line tiene que terminar con \\n");
+        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
     }
+
+    return PARSE_ERROR_NO_ERROR;
 }
 
-static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) {
+static Parse_Error parse_headers(Allocator *allocator, Lexer *lexer, Request *request) {
     do {
         u32 field_name_start = lexer->read_position;
 
@@ -329,54 +353,56 @@ static void parse_headers(Allocator *allocator, Lexer *lexer, Request *request) 
         // si ya no quedan field names
         if (lexer->read_position - field_name_start == 1) {
             if (lexer->current_char != '\r') {
-                assert(0 && "headers estan mal formados");
+                return PARSE_ERROR_MALFORMED_HEADER;
             }
             read_char(lexer);
             if (lexer->current_char != '\n') {
-                assert(0 && "headers estan mal formados");
+                return PARSE_ERROR_MALFORMED_HEADER;
             }
-            return;
+            return PARSE_ERROR_NO_ERROR;
         }
         
-        if (lexer->current_char == ':') {
-
-            // substring to lower case
-            u32 field_name_size = (lexer->read_position - 1) - field_name_start;
-            String substring = string_with_len((char *)&lexer->buf[field_name_start], field_name_size); 
-            String field_name = string_to_lower(allocator, substring);
-
-            // espacio
-            read_char(lexer);
-            if (lexer->current_char != ' ') {
-                assert(0 && "aca deberia haber un espacio");
-            }
-
-            // field value
-            u32 field_value_start = lexer->read_position;
-            u32 field_value_end;
-
-            do {
-                read_char(lexer);
-            } while (lexer->current_char != '\r');
-
-            field_value_end = lexer->buf_position - 1;
-            String field_value = string_sub_cstr(allocator, (char *)lexer->buf, field_value_start, field_value_end);
-            headers_put(&request->headers_map, field_name, field_value);
-
-            // \r\n
-            read_char(lexer);
-            if (lexer->current_char != '\n') {
-                assert(0 && "headers estan mal formados");
-            }
-        } else {
-            assert(0 && "headers estan mal formados");
+        if (lexer->current_char != ':') {
+            return PARSE_ERROR_MALFORMED_HEADER;
         }
+
+        // substring to lower case
+        u32 field_name_size = (lexer->read_position - 1) - field_name_start;
+        String substring = string_with_len((char *)&lexer->buf[field_name_start], field_name_size); 
+        String field_name = string_to_lower(allocator, substring);
+
+        // espacio
+        read_char(lexer);
+        if (lexer->current_char != ' ') {
+            return PARSE_ERROR_MALFORMED_HEADER;
+        }
+
+        // field value
+        u32 field_value_start = lexer->read_position;
+        u32 field_value_end;
+
+        do {
+            read_char(lexer);
+        } while (lexer->current_char != '\r');
+
+        field_value_end = lexer->buf_position - 1;
+        String field_value = string_sub_cstr(allocator, (char *)lexer->buf, field_value_start, field_value_end);
+        headers_put(&request->headers_map, field_name, field_value);
+
+        // \r\n
+        read_char(lexer);
+        if (lexer->current_char != '\n') {
+            return PARSE_ERROR_MALFORMED_HEADER;
+        }
+
     } while (lexer->current_char != '\r');
 
     read_char(lexer);
     if (lexer->current_char != '\n') {
-        assert(0 && "headers tienen que terminar con el \\n");
+        return PARSE_ERROR_MALFORMED_HEADER;
     }
+
+    return PARSE_ERROR_NO_ERROR;
 }
 
 static void parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
@@ -386,6 +412,26 @@ static void parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
         request->body.length = len;
         request->body.data = &lexer->buf[lexer->read_position];
     }
+}
+
+static void connection_write(Allocator *allocator, s32 fd, Response response) {
+    String encoded_response = encode_response(allocator, response);
+
+    u32 bytes_written = write(fd, encoded_response.data, encoded_response.size);
+    if (bytes_written != encoded_response.size) {
+        perror("error al escribir al cliente");
+    }
+}
+
+static void handle_parse_error(Allocator *allocator, s32 fd, Parse_Error err) {
+    Response response = {0};
+    response.status = 400;
+    init_headers_map(&response.headers);
+
+    const char *error_message = parse_error_messages[err];
+    response_write(allocator, &response, (u8 *)error_message, string_size(error_message));
+
+    connection_write(allocator, fd, response);
 }
 
 int main(int argc, char *argv[]) {
@@ -471,16 +517,35 @@ int main(int argc, char *argv[]) {
                 break;
             }
             lexer.size = bytes_read - 1;
-    
-            Headers_Map headers_map = {0};
-            init_headers_map(&headers_map);
 
             Request request = {0};
-            request.headers_map = headers_map;
+            init_headers_map(&request.headers_map);
 
             // TODO: alocar memoria temporal
-            parse_request_line(&allocator, &lexer, &request);
-            parse_headers(&allocator, &lexer, &request);
+            Parse_Error err;
+
+            err = parse_request_line(&allocator, &lexer, &request);
+            if (err) {
+                handle_parse_error(&allocator, client_fd, err);
+                break;
+            }
+
+            err = parse_headers(&allocator, &lexer, &request);
+            if (err) {
+                handle_parse_error(&allocator, client_fd, err);
+                break;
+            }
+
+            // print headers
+            for (u32 i = 0; i < request.headers_map.length; i++) {
+                Header header = request.headers_map.headers[i];
+                if (header.occupied) {
+                    printf("Key: %.*s, Value: %.*s\n", 
+                            string_print(header.field_name),
+                            string_print(header.field_value));
+                }
+            }
+
             parse_body(&allocator, &lexer, &request);
 
             // Handler
@@ -488,18 +553,9 @@ int main(int argc, char *argv[]) {
             init_headers_map(&response.headers);
 
             http_handler(&allocator, request, &response);
-
-            String encoded_response = encode_response(&allocator, response);
-            printf("respuesta: %.*s\n", string_print(encoded_response));
-
-            // Respuesta
-            u32 bytes_written = write(client_fd, encoded_response.data, encoded_response.size);
-            if (bytes_written != encoded_response.size) {
-                perror("error al escribir al cliente");
-            }
-
-            printf("ya le escribi...\n");
             
+            connection_write(&allocator, client_fd, response);
+
             // TODO: desalocar memoria temporal
         }
     
