@@ -204,7 +204,7 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
 
 static void http_handler(Allocator *allocator, Request req, Response *res) {
 
-    String body = string("hola como estas\n");
+    String body = string("{ \"foo\": \"bar\" }");
 
     res->status = 200;
     response_write(allocator, res, (u8 *)body.data, body.size);
@@ -440,7 +440,7 @@ static void http_handler(Allocator *allocator, Request req, Response *res) {
     res->status = 200;
     response_write(allocator, res, (u8 *)body.data, body.size);
     connection_write(allocator, fd, response);
- }
+}
 
 typedef struct ThreadArgs {
     Allocator *allocator;
@@ -578,13 +578,15 @@ int main(int argc, char *argv[]) {
             Response response = {0};
             init_headers_map(&response.headers);
 
-            http_handler(&allocator, request, &response);
-
             ThreadArgs thread_args = {0};
             thread_args.allocator = &allocator;
             thread_args.request = request;
             thread_args.response = &response;
-            pthread_create();
+
+            // TODO: El hilo deberia crearse ni bien tengo un cliente? O deberia ser por cada 'request' de cada cliente?
+            pthread_t thread;
+            pthread_create(&thread, NULL, thread_func, &thread_args);
+            pthread_join(thread, NULL);
             
             connection_write(&allocator, client_fd, response);
 
