@@ -202,14 +202,6 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
     response->body.length = length;
 }
 
-static void http_handler(Allocator *allocator, Request req, Response *res) {
-
-    String body = string("{ \"foo\": \"bar\" }");
-
-    res->status = 200;
-    response_write(allocator, res, (u8 *)body.data, body.size);
-}
-
 typedef struct Lexer {
     u8 *buf;
     u32 capacity;
@@ -439,7 +431,6 @@ static void http_handler(Allocator *allocator, Request req, Response *res) {
 
     res->status = 200;
     response_write(allocator, res, (u8 *)body.data, body.size);
-    connection_write(allocator, fd, response);
 }
 
 typedef struct ThreadArgs {
