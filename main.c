@@ -434,6 +434,32 @@ static void handle_parse_error(Allocator *allocator, s32 fd, Parse_Error err) {
     connection_write(allocator, fd, response);
 }
 
+static void http_handler(Allocator *allocator, Request req, Response *res) {
+    String body = string("{ \"foo\": \"bar\" }");
+
+    res->status = 200;
+    response_write(allocator, res, (u8 *)body.data, body.size);
+    connection_write(allocator, fd, response);
+ }
+
+typedef struct ThreadArgs {
+    Allocator *allocator;
+    Request request;
+    Response *response;
+} ThreadArgs;
+
+void *thread_func(void *arg) {
+    ThreadArgs *thread_args = (ThreadArgs *)arg;
+
+    Allocator *allocator = thread_args->allocator;
+    Request request = thread_args->request;
+    Response *response = thread_args->response;
+
+    http_handler(allocator, request, response);
+
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     printf("iniciando servidor..\n");
 
@@ -553,6 +579,12 @@ int main(int argc, char *argv[]) {
             init_headers_map(&response.headers);
 
             http_handler(&allocator, request, &response);
+
+            ThreadArgs thread_args = {0};
+            thread_args.allocator = &allocator;
+            thread_args.request = request;
+            thread_args.response = &response;
+            pthread_create();
             
             connection_write(&allocator, client_fd, response);
 
