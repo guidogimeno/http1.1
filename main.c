@@ -433,26 +433,80 @@ static void http_handler(Allocator *allocator, Request req, Response *res) {
     response_write(allocator, res, (u8 *)body.data, body.size);
 }
 
+typedef struct Connection {
+    s32 fd;
+    String host;
+    u16 port;
+} Connection;
+
 typedef struct ThreadArgs {
     Allocator *allocator;
-    Request request;
-    Response *response;
+    Connection connection;
 } ThreadArgs;
 
-void *thread_func(void *arg) {
+// TODO:
+// - Lectura Larga -> Keep Alive
+// - Lectura Corta
+void *handle_connection(void *arg) {
     ThreadArgs *thread_args = (ThreadArgs *)arg;
 
     Allocator *allocator = thread_args->allocator;
-    Request request = thread_args->request;
-    Response *response = thread_args->response;
+    Connection connection = thread_args->connection;
+    s32 client_fd = connection.fd;
 
-    http_handler(allocator, request, response);
+    u8 buf[1024];
+    Lexer lexer = {0};
+    init_lexer(&lexer, buf, 1024);
+
+    while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
+        // TODO: alocar memoria temporal
+        s32 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
+        if (bytes_read == 0) {
+            printf("el cliente cerro la conexion:%.*s\n", string_print(connection.host));
+            break;
+        } else if (bytes_read == -1) {
+            perror("error al leer del cliente\n");
+            break;
+        }
+        lexer.size = bytes_read - 1;
+
+        Request request = {0};
+        init_headers_map(&request.headers_map);
+
+        Response response = {0};
+        init_headers_map(&response.headers);
+
+        Parse_Error err = parse_request_line(allocator, &lexer, &request);
+        if (err) {
+            handle_parse_error(allocator, client_fd, err);
+            break;
+        }
+
+        err = parse_headers(allocator, &lexer, &request);
+        if (err) {
+            handle_parse_error(allocator, client_fd, err);
+            break;
+        }
+
+        parse_body(allocator, &lexer, &request);
+
+        http_handler(allocator, request, &response);
+        connection_write(allocator, client_fd, response);
+
+        // TODO: desalocar memoria temporal
+    }
+
+    if (close(client_fd) == -1) {
+        perror("error al cerrar el client_fd");
+        // TODO: ver como manejar este error
+        return NULL;
+    }
 
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
-    printf("iniciando servidor..\n");
+    printf("Iniciando servidor..\n");
 
     u32 allocator_capacity = 1024 * 1024;
     Allocator allocator = {
@@ -500,9 +554,9 @@ int main(int argc, char *argv[]) {
         return -1;
     }
     
-    char *host = inet_ntoa(server_addr.sin_addr);
-    u16 port = ntohs(server_addr.sin_port);
-    printf("servidor escuchando en: %s:%d\n", host, port);
+    String server_host = string(inet_ntoa(server_addr.sin_addr));
+    u16 server_port = ntohs(server_addr.sin_port);
+    printf("Servidor escuchando en: %.*s:%d\n", string_print(server_host), server_port);
     
     // aceptar conexiones
     while (true) {
@@ -512,82 +566,24 @@ int main(int argc, char *argv[]) {
         s32 client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_addr_len); // TODO: despues probar de hacer nonblocking
         if (client_fd == -1) {
             perror("error al aceptar cliente");
-            return -1;
+            return -1; // TODO: manejar mejor este error
         }
         server.clients[0] = client_fd;
-    
-        char *host = inet_ntoa(client_addr.sin_addr);
-        u16 port = ntohs(client_addr.sin_port);
-        printf("nuevo cliente aceptado: %s:%d\n", host, port);
-    
-        u8 buf[1024];
-        Lexer lexer = {0};
-        init_lexer(&lexer, buf, 1024);
-    
-        while (true) {
-            s32 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
-            if (bytes_read == 0) {
-                printf("el cliente cerro la conexion:%s\n", host);
-                break;
-            } else if (bytes_read == -1) {
-                perror("error al leer del cliente\n");
-                break;
-            }
-            lexer.size = bytes_read - 1;
 
-            Request request = {0};
-            init_headers_map(&request.headers_map);
+        Connection connection = {0};
+        connection.fd = client_fd;
+        connection.host = string(inet_ntoa(client_addr.sin_addr));
+        connection.port = ntohs(client_addr.sin_port); 
 
-            // TODO: alocar memoria temporal
-            Parse_Error err;
+        printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection.host), connection.port);
 
-            err = parse_request_line(&allocator, &lexer, &request);
-            if (err) {
-                handle_parse_error(&allocator, client_fd, err);
-                break;
-            }
+        pthread_t thread;
+        ThreadArgs thread_args = {0};
+        thread_args.allocator = &allocator;
+        thread_args.connection = connection;
 
-            err = parse_headers(&allocator, &lexer, &request);
-            if (err) {
-                handle_parse_error(&allocator, client_fd, err);
-                break;
-            }
-
-            // print headers
-            for (u32 i = 0; i < request.headers_map.length; i++) {
-                Header header = request.headers_map.headers[i];
-                if (header.occupied) {
-                    printf("Key: %.*s, Value: %.*s\n", 
-                            string_print(header.field_name),
-                            string_print(header.field_value));
-                }
-            }
-
-            parse_body(&allocator, &lexer, &request);
-
-            // Handler
-            Response response = {0};
-            init_headers_map(&response.headers);
-
-            ThreadArgs thread_args = {0};
-            thread_args.allocator = &allocator;
-            thread_args.request = request;
-            thread_args.response = &response;
-
-            // TODO: El hilo deberia crearse ni bien tengo un cliente? O deberia ser por cada 'request' de cada cliente?
-            pthread_t thread;
-            pthread_create(&thread, NULL, thread_func, &thread_args);
-            pthread_join(thread, NULL);
-            
-            connection_write(&allocator, client_fd, response);
-
-            // TODO: desalocar memoria temporal
-        }
-    
-        if (close(client_fd) == -1) {
-            perror("error al cerrar el client_fd");
-            return -1;
-        }
+        pthread_create(&thread, NULL, handle_connection, &thread_args);
+        pthread_join(thread, NULL);
     }
       
     close(sockfd);
