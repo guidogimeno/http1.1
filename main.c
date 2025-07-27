@@ -444,10 +444,28 @@ typedef struct ThreadArgs {
     Connection connection;
 } ThreadArgs;
 
+void otra_cosa_2(Allocator *allocator) {
+    AllocatorTemp scratch = get_scratch(&allocator, 1);
+    printf("Arena nivel 3: %p\n", scratch.allocator);
+    release_scratch(scratch);
+}
+
+void otra_cosa(Allocator *allocator) {
+    AllocatorTemp scratch = get_scratch(&allocator, 1);
+    printf("Arena nivel 2: %p\n", scratch.allocator);
+    otra_cosa_2(scratch.allocator);
+    release_scratch(scratch);
+}
+
 // TODO:
 // - Lectura Larga -> Keep Alive
 // - Lectura Corta
 void *handle_connection(void *arg) {
+    AllocatorTemp scratch = get_scratch(0, 0);
+    printf("Arena nivel 1: %p\n", scratch.allocator);
+    otra_cosa(scratch.allocator);
+    release_scratch(scratch);
+
     ThreadArgs *thread_args = (ThreadArgs *)arg;
 
     Allocator *allocator = thread_args->allocator;

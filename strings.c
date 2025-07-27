@@ -323,7 +323,12 @@ void sbuilder_append(String_Builder *builder, String str) {
     u32 total_length = builder->length + str.size;
 
     if (total_length > builder->capacity) {
-        u32 new_capacity = total_length * 2;
+        u32 new_capacity = builder->capacity;
+
+        while (builder->capacity < total_length) {
+            new_capacity *= 2;
+        }
+
         printf("realocacion - capacidad anterior: %d capacidad nueva: %d\n", builder->capacity, new_capacity);
 
         u8 *new_data = alloc(builder->allocator, new_capacity);

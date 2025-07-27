@@ -22,7 +22,7 @@ case "$1" in
         ;;
     "debug")
         clang -g -std=c11 -Wall -Werror main.c -o main
-        gdb main
+        gdb -ex "tui enable" -ex "layout src" -ex "break main" ./main
         ;;
     "clean")
         if [ -f "main" ]; then

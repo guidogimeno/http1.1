@@ -29,6 +29,24 @@ typedef struct Allocator {
     u32 capacity;
 } Allocator;
 
+typedef struct AllocatorTemp {
+    Allocator *allocator;
+    u32 position;
+} AllocatorTemp;
+
+#define MAX_SCRATCH_COUNT 2
+
+__thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
+
+Allocator *allocator_make(u32 capacity) {
+    void *mem = malloc(capacity);
+    Allocator *allocator = (Allocator *)mem;
+    allocator->data = (u8 *)mem;
+    allocator->capacity = capacity;
+    allocator->size = 0;
+    return allocator;
+}
+
 void *alloc(Allocator *allocator, u32 size) {
     assert(allocator->size + size <= allocator->capacity);
     void *result = &allocator->data[allocator->size];
@@ -36,3 +54,47 @@ void *alloc(Allocator *allocator, u32 size) {
     return result;
 }
 
+AllocatorTemp allocator_temp_begin(Allocator *allocator) {
+    AllocatorTemp allocatorTemp = {
+        .allocator = allocator,
+        .position = allocator->size,
+    };
+    return allocatorTemp;
+}
+
+void allocator_temp_end(AllocatorTemp allocatorTemp) {
+    allocatorTemp.allocator->size = allocatorTemp.position;
+}
+
+AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count) {
+    if (thread_local_allocators_pool[0] == 0) {
+        for (u32 i = 0; i < MAX_SCRATCH_COUNT; i++) {
+            u32 allocator_capacity = 1024 * 1024;
+            thread_local_allocators_pool[i] = allocator_make(allocator_capacity); 
+        }
+    }
+
+    if (conflict_count == 0) {
+        return allocator_temp_begin(thread_local_allocators_pool[0]);
+    }
+
+    for (u32 pool_index = 0; pool_index < MAX_SCRATCH_COUNT; pool_index++) {
+        Allocator *allocator = thread_local_allocators_pool[pool_index];
+
+        bool is_free = true;
+        for (u32 conflict_index = 0; conflict_index < conflict_count; conflict_index++) {
+            if (allocator == conflicts[conflict_index]) {
+                is_free = false;
+                break;
+            }
+        }
+
+        if (is_free) {
+            return allocator_temp_begin(allocator);
+        }
+    }
+
+    return (AllocatorTemp){0};
+}
+
+#define release_scratch(t) allocator_temp_end(t)
