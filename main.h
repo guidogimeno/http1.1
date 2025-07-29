@@ -23,6 +23,10 @@ typedef int64_t s64;
 typedef float f32;
 typedef double f64;
 
+#define KB 1024
+#define MB 1024 * KB
+#define GB 1024 * MB
+
 typedef struct Allocator {
     u8 *data;
     u32 size;
@@ -39,9 +43,9 @@ typedef struct AllocatorTemp {
 __thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
 
 Allocator *allocator_make(u32 capacity) {
-    void *mem = malloc(capacity);
-    Allocator *allocator = (Allocator *)mem;
-    allocator->data = (u8 *)mem;
+    void *memory = malloc(sizeof(Allocator) + capacity);
+    Allocator *allocator = (Allocator *)memory;
+    allocator->data = memory + sizeof(Allocator);
     allocator->capacity = capacity;
     allocator->size = 0;
     return allocator;
@@ -69,8 +73,7 @@ void allocator_temp_end(AllocatorTemp allocatorTemp) {
 AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count) {
     if (thread_local_allocators_pool[0] == 0) {
         for (u32 i = 0; i < MAX_SCRATCH_COUNT; i++) {
-            u32 allocator_capacity = 1024 * 1024;
-            thread_local_allocators_pool[i] = allocator_make(allocator_capacity); 
+            thread_local_allocators_pool[i] = allocator_make(1024 * 1024); 
         }
     }
 

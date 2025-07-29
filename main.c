@@ -203,9 +203,12 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
 }
 
 typedef struct Lexer {
+    s32 fd;
+
     u8 *buf;
     u32 capacity;
     u32 size;
+
     u32 buf_position;
     u32 read_position;
     char current_char;
@@ -253,18 +256,23 @@ typedef enum Parse_Error {
     // headers errors
     PARSE_ERROR_MALFORMED_HEADER,
 
+    // body errors
+    PARSE_ERROR_BODY_TOO_LARGE,
+
     PARSE_ERROR_COUNT
 } Parse_Error;
 
 static const char *parse_error_messages[PARSE_ERROR_COUNT + 1] = {
     "",
 
-    "parse_error_malformed_request_line",
-    "parse_error_invalid_method",
-    "parse_error_invalid_uri",
-    "parse_error_invalid_version",
+    "parse error malformed request line",
+    "parse error invalid method",
+    "parse error invalid uri",
+    "parse error invalid version",
 
-    "parse_error_malformed_header",
+    "parse error malformed header",
+
+    "parse error body too large",
 
     "count"
 };
@@ -397,13 +405,20 @@ static Parse_Error parse_headers(Allocator *allocator, Lexer *lexer, Request *re
     return PARSE_ERROR_NO_ERROR;
 }
 
-static void parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
+static Parse_Error parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
     String *content_length = headers_get(&request->headers_map, string("content-length"));
+
     if (content_length != NULL) {
         s64 len = string_to_int(*content_length);
+        if (len > 4 * KB) { 
+            return PARSE_ERROR_BODY_TOO_LARGE;
+        }
+
         request->body.length = len;
         request->body.data = &lexer->buf[lexer->read_position];
     }
+
+    return PARSE_ERROR_NO_ERROR;
 }
 
 static void connection_write(Allocator *allocator, s32 fd, Response response) {
@@ -440,44 +455,25 @@ typedef struct Connection {
 } Connection;
 
 typedef struct ThreadArgs {
-    Allocator *allocator;
     Connection connection;
 } ThreadArgs;
-
-void otra_cosa_2(Allocator *allocator) {
-    AllocatorTemp scratch = get_scratch(&allocator, 1);
-    printf("Arena nivel 3: %p\n", scratch.allocator);
-    release_scratch(scratch);
-}
-
-void otra_cosa(Allocator *allocator) {
-    AllocatorTemp scratch = get_scratch(&allocator, 1);
-    printf("Arena nivel 2: %p\n", scratch.allocator);
-    otra_cosa_2(scratch.allocator);
-    release_scratch(scratch);
-}
 
 // TODO:
 // - Lectura Larga -> Keep Alive
 // - Lectura Corta
 void *handle_connection(void *arg) {
     AllocatorTemp scratch = get_scratch(0, 0);
-    printf("Arena nivel 1: %p\n", scratch.allocator);
-    otra_cosa(scratch.allocator);
-    release_scratch(scratch);
+    Allocator *allocator = scratch.allocator;
 
     ThreadArgs *thread_args = (ThreadArgs *)arg;
-
-    Allocator *allocator = thread_args->allocator;
     Connection connection = thread_args->connection;
     s32 client_fd = connection.fd;
 
-    u8 buf[1024];
+    u8 buf[8 * KB];
     Lexer lexer = {0};
-    init_lexer(&lexer, buf, 1024);
+    init_lexer(&lexer, buf, 8 * KB);
 
     while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
-        // TODO: alocar memoria temporal
         s32 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
         if (bytes_read == 0) {
             printf("el cliente cerro la conexion:%.*s\n", string_print(connection.host));
@@ -491,9 +487,6 @@ void *handle_connection(void *arg) {
         Request request = {0};
         init_headers_map(&request.headers_map);
 
-        Response response = {0};
-        init_headers_map(&response.headers);
-
         Parse_Error err = parse_request_line(allocator, &lexer, &request);
         if (err) {
             handle_parse_error(allocator, client_fd, err);
@@ -506,13 +499,21 @@ void *handle_connection(void *arg) {
             break;
         }
 
-        parse_body(allocator, &lexer, &request);
+        err = parse_body(allocator, &lexer, &request);
+        if (err) {
+            handle_parse_error(allocator, client_fd, err);
+            break;
+        }
+
+        Response response = {0};
+        init_headers_map(&response.headers);
 
         http_handler(allocator, request, &response);
-        connection_write(allocator, client_fd, response);
 
-        // TODO: desalocar memoria temporal
+        connection_write(allocator, client_fd, response);
     }
+
+    release_scratch(scratch);
 
     if (close(client_fd) == -1) {
         perror("error al cerrar el client_fd");
@@ -525,13 +526,6 @@ void *handle_connection(void *arg) {
 
 int main(int argc, char *argv[]) {
     printf("Iniciando servidor..\n");
-
-    u32 allocator_capacity = 1024 * 1024;
-    Allocator allocator = {
-        .data = malloc(allocator_capacity),
-        .capacity = allocator_capacity,
-        .size = 0,
-    };
 
     // creacion del socket
     u32 sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -597,7 +591,6 @@ int main(int argc, char *argv[]) {
 
         pthread_t thread;
         ThreadArgs thread_args = {0};
-        thread_args.allocator = &allocator;
         thread_args.connection = connection;
 
         pthread_create(&thread, NULL, handle_connection, &thread_args);
