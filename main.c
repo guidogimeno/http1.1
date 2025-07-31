@@ -7,17 +7,6 @@
 #define MAX_CONNECTIONS 1024
 #define MAX_EPOLL_EVENTS 32 // TODO: Ver si en compilacion o runtime se puede calcular en base a la PC
 
-typedef struct Connection {
-    s32 fd;
-    String host;
-    u16 port;
-} Connection;
-
-typedef struct Server {
-    s32 server_fd;
-    Connection connections[MAX_CONNECTIONS];
-} Server;
-
 typedef struct Header {
     String field_name;
     String field_value;
@@ -117,6 +106,7 @@ static String *headers_get(Headers_Map *headers_map, String field_name) {
     return NULL;
 }
 
+
 typedef enum Method {
     METHOD_GET,
     METHOD_PUT,
@@ -142,6 +132,19 @@ typedef struct Response {
     Headers_Map headers;
     Body body;
 } Response;
+
+typedef struct Connection {
+    s32 fd;
+    String host;
+    u16 port;
+
+    Request request;
+} Connection;
+
+typedef struct Server {
+    s32 server_fd;
+    Connection connections[MAX_CONNECTIONS];
+} Server;
 
 static String http_status_reason(u16 status) {
     switch (status) {
@@ -593,11 +596,14 @@ int main(int argc, char *argv[]) {
     socklen_t client_addr_len = sizeof(client_addr);
 
     u32 file_descriptors_count;
+
+    Allocator *allocator = allocator_make(4 * KB);
+
     // aceptar conexiones
     while (true) {
         file_descriptors_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
 
-        for (u32 i; i < file_descriptors_count; i++) {
+        for (u32 i = 0; i < file_descriptors_count; i++) {
             if (events[i].data.fd == server_fd) {
                 // TODO: despues probar de hacer nonblocking
                 s32 client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
@@ -607,7 +613,7 @@ int main(int argc, char *argv[]) {
                 }
                 
                 // non-blocking
-                res = fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK)
+                res = fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
                 if (res == -1) {
                     perror("error al setear el nonblocking");
                     return -1; // TODO: manejar mejor este error
@@ -619,22 +625,65 @@ int main(int argc, char *argv[]) {
                     return -1;
                 }
 
-                Connection *connection = &server.connections[events.[i].data.fd];
+                printf("FD del cliente: %d\n", client_fd);
+                Connection *connection = &server.connections[client_fd];
+                connection->fd = client_fd;
                 connection->host = string(inet_ntoa(client_addr.sin_addr));
                 connection->port = ntohs(client_addr.sin_port); 
 
-                printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port;
+                printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
 
-            } else if (events[i].data.fd & EPOLLIN) {
-                Connection *connection = &server.connections[events.[i].data.fd];
-                connection->fd = events[i].data.fd;
+            } else if (events[i].events & EPOLLIN) {
+                Connection *connection = &server.connections[events[i].data.fd];
 
-                pthread_t thread;
-                ThreadArgs thread_args = {0};
-                thread_args.connection = connection;
+                u8 buf[8 * KB];
+                Lexer lexer = {0};
+                init_lexer(&lexer, buf, 8 * KB);
 
-                pthread_create(&thread, NULL, handle_connection, &thread_args);
-                pthread_join(thread, NULL);
+                while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
+                    s32 bytes_read = read(connection->fd, lexer.buf, lexer.capacity);
+                    if (bytes_read == 0) {
+                        printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
+                        break;
+                    } else if (bytes_read == -1) {
+                        perror("error al leer del cliente\n");
+                        break;
+                    }
+                    lexer.size = bytes_read - 1;
+
+                    Request request = {0};
+                    init_headers_map(&request.headers_map);
+
+                    Parse_Error err = parse_request_line(allocator, &lexer, &request);
+                    if (err) {
+                        handle_parse_error(allocator, connection->fd, err);
+                        break;
+                    }
+
+                    err = parse_headers(allocator, &lexer, &request);
+                    if (err) {
+                        handle_parse_error(allocator, connection->fd, err);
+                        break;
+                    }
+
+                    err = parse_body(allocator, &lexer, &request);
+                    if (err) {
+                        handle_parse_error(allocator, connection->fd, err);
+                        break;
+                    }
+
+                    connection->request = request;
+                    break; // TODO: buscar como leer por chunks o algo asi
+                }
+            } else if (events[i].events & EPOLLOUT) {
+                Connection *connection = &server.connections[events[i].data.fd];
+
+                Response response = {0};
+                init_headers_map(&response.headers);
+                
+                http_handler(allocator, connection->request, &response);
+                
+                connection_write(allocator, connection->fd, response);
             }
         }
     }
