@@ -4,8 +4,11 @@
 
 #include "strings.c"
 
+// #include <sys/resource.h>
+
 #define MAX_CONNECTIONS 1024
 #define MAX_EPOLL_EVENTS 32 // TODO: Ver si en compilacion o runtime se puede calcular en base a la PC
+#define ALLOCATOR_CHUNK_SIZE 4 * KB
 
 typedef struct Header {
     String field_name;
@@ -537,7 +540,76 @@ static s32 epoll_events_add_file_descriptor(s32 epoll_fd, s32 fd, u32 events) {
     return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event);
 }
 
+// TODO: ver como hago con los clientes y los fds
+// static u32 get_rl_limit() {
+//     struct rlimit rl;
+//     getrlimit(RLIMIT_NOFILE, &rl);
+//     assert(rl.rlim_cur <= 1024 && "rl es muy alto");
+//     return rl.rlim_cur;
+// }
+
+typedef struct Ints {
+    s32 *items;
+    u64 length;
+    u64 capacity;
+} Ints;
+
 int main(int argc, char *argv[]) {
+    Allocator *a = allocator_make(1 * MB);
+
+    Ints ints = {0};
+    for (u32 i = 0; i < 300; i++) {
+        *dynamic_array_append(a, &ints) = (s32)i;
+    }
+    
+    for (u32 i = 0; i < ints.length; i++) {
+        // printf("valor: %d\n", ints.items[i]);
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     printf("Iniciando servidor..\n");
 
     // creacion del socket
@@ -597,8 +669,8 @@ int main(int argc, char *argv[]) {
 
     u32 file_descriptors_count;
 
-    Allocator *allocator = allocator_make(4 * KB);
-
+    Allocator *allocator = allocator_make(MAX_CONNECTIONS * ALLOCATOR_CHUNK_SIZE);
+    
     // aceptar conexiones
     while (true) {
         file_descriptors_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
@@ -633,57 +705,59 @@ int main(int argc, char *argv[]) {
 
                 printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
 
-            } else if (events[i].events & EPOLLIN) {
-                Connection *connection = &server.connections[events[i].data.fd];
+            } else {
+                if (events[i].events & EPOLLIN) {
+                    Connection *connection = &server.connections[events[i].data.fd];
 
-                u8 buf[8 * KB];
-                Lexer lexer = {0};
-                init_lexer(&lexer, buf, 8 * KB);
+                    u8 buf[8 * KB];
+                    Lexer lexer = {0};
+                    init_lexer(&lexer, buf, 8 * KB);
 
-                while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
-                    s32 bytes_read = read(connection->fd, lexer.buf, lexer.capacity);
-                    if (bytes_read == 0) {
-                        printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
-                        break;
-                    } else if (bytes_read == -1) {
-                        perror("error al leer del cliente\n");
-                        break;
+                    while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
+                        s32 bytes_read = read(connection->fd, lexer.buf, lexer.capacity);
+                        if (bytes_read == 0) {
+                            printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
+                            break;
+                        } else if (bytes_read == -1) {
+                            perror("error al leer del cliente\n");
+                            break;
+                        }
+                        lexer.size = bytes_read - 1;
+
+                        Request request = {0};
+                        init_headers_map(&request.headers_map);
+
+                        Parse_Error err = parse_request_line(allocator, &lexer, &request);
+                        if (err) {
+                            handle_parse_error(allocator, connection->fd, err);
+                            break;
+                        }
+
+                        err = parse_headers(allocator, &lexer, &request);
+                        if (err) {
+                            handle_parse_error(allocator, connection->fd, err);
+                            break;
+                        }
+
+                        err = parse_body(allocator, &lexer, &request);
+                        if (err) {
+                            handle_parse_error(allocator, connection->fd, err);
+                            break;
+                        }
+
+                        connection->request = request;
+                        break; // TODO: buscar como leer por chunks o algo asi
                     }
-                    lexer.size = bytes_read - 1;
+                } else if (events[i].events & EPOLLOUT) {
+                    Connection *connection = &server.connections[events[i].data.fd];
 
-                    Request request = {0};
-                    init_headers_map(&request.headers_map);
-
-                    Parse_Error err = parse_request_line(allocator, &lexer, &request);
-                    if (err) {
-                        handle_parse_error(allocator, connection->fd, err);
-                        break;
-                    }
-
-                    err = parse_headers(allocator, &lexer, &request);
-                    if (err) {
-                        handle_parse_error(allocator, connection->fd, err);
-                        break;
-                    }
-
-                    err = parse_body(allocator, &lexer, &request);
-                    if (err) {
-                        handle_parse_error(allocator, connection->fd, err);
-                        break;
-                    }
-
-                    connection->request = request;
-                    break; // TODO: buscar como leer por chunks o algo asi
+                    Response response = {0};
+                    init_headers_map(&response.headers);
+                    
+                    http_handler(allocator, connection->request, &response);
+                    
+                    connection_write(allocator, connection->fd, response);
                 }
-            } else if (events[i].events & EPOLLOUT) {
-                Connection *connection = &server.connections[events[i].data.fd];
-
-                Response response = {0};
-                init_headers_map(&response.headers);
-                
-                http_handler(allocator, connection->request, &response);
-                
-                connection_write(allocator, connection->fd, response);
             }
         }
     }

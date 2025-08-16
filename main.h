@@ -11,39 +11,58 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-typedef uint8_t u8;
+typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-typedef int8_t s8;
+typedef int8_t  s8;
 typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
-typedef float f32;
+typedef float  f32;
 typedef double f64;
 
 #define KB 1024
 #define MB 1024 * KB
 #define GB 1024 * MB
 
+
+
+// ###################################
+// ### Allocators ####################
+// ###################################
+
+#define DEFAULT_ALIGNMENT (2*sizeof(void *))
+
 typedef struct Allocator {
-    u8 *data;
-    u32 size;
-    u32 capacity;
+    u8  *data;
+    u64 size;
+    u64 capacity;
 } Allocator;
 
 typedef struct AllocatorTemp {
     Allocator *allocator;
-    u32 position;
+    u32       position;
 } AllocatorTemp;
 
 #define MAX_SCRATCH_COUNT 2
 
 __thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
 
-Allocator *allocator_make(u32 capacity) {
+
+Allocator *allocator_make(u64 capacity);
+void *alloc(Allocator *allocator, u64 size);
+void *alloc_aligned(Allocator *allocator, u64 size, size_t align);
+
+AllocatorTemp allocator_temp_begin(Allocator *allocator);
+void allocator_temp_end(AllocatorTemp allocatorTemp);
+
+AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count);
+#define release_scratch(t) allocator_temp_end(t)
+
+Allocator *allocator_make(u64 capacity) {
     void *memory = malloc(sizeof(Allocator) + capacity);
     Allocator *allocator = (Allocator *)memory;
     allocator->data = memory + sizeof(Allocator);
@@ -52,10 +71,39 @@ Allocator *allocator_make(u32 capacity) {
     return allocator;
 }
 
-void *alloc(Allocator *allocator, u32 size) {
-    assert(allocator->size + size <= allocator->capacity);
-    void *result = &allocator->data[allocator->size];
-    allocator->size += size;
+static bool is_power_of_two(uintptr_t x) {
+	return (x & (x-1)) == 0;
+}
+
+static uintptr_t align_forward(uintptr_t ptr, size_t align) {
+	uintptr_t p, a, modulo;
+
+	assert(is_power_of_two(align));
+
+	p = ptr;
+	a = (uintptr_t)align;
+	modulo = p & (a-1);
+
+	if (modulo != 0) {
+		p += a - modulo;
+	}
+	return p;
+}
+
+void *alloc(Allocator *allocator, u64 size) {
+    return alloc_aligned(allocator, size, DEFAULT_ALIGNMENT);
+}
+
+void *alloc_aligned(Allocator *allocator, u64 size, size_t align) {
+    uintptr_t current_ptr = (uintptr_t)allocator->data + (uintptr_t)allocator->size;
+    uintptr_t offset = align_forward(current_ptr, align);
+    offset -= (uintptr_t)allocator->data;
+
+    assert(offset + size <= allocator->capacity);
+
+    void *result = &allocator->data[offset];
+    allocator->size = offset + size;
+
     return result;
 }
 
@@ -101,4 +149,61 @@ AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count) {
     return (AllocatorTemp){0};
 }
 
-#define release_scratch(t) allocator_temp_end(t)
+
+
+// ###################################
+// ### Strings #######################
+// ###################################
+
+
+
+
+// ###################################
+// ### Dynamic Arrays ################
+// ###################################
+
+typedef struct DynamicArray {
+    void *items;
+    u64 length;
+    u64 capacity;
+} DynamicArray;
+
+void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t item_size) {
+    DynamicArray *dynamic_array = (DynamicArray *)dynamic_array_ptr;
+
+    if (dynamic_array->capacity <= 0) {
+        dynamic_array->capacity = 1;
+    }
+
+    uintptr_t items_offset = dynamic_array->length * item_size;
+
+    if (allocator->data + allocator->size == dynamic_array->items + items_offset) {
+        alloc_aligned(allocator, dynamic_array->capacity * item_size, 1);
+    } else {
+        void *data = alloc(allocator, 2 * dynamic_array->capacity * item_size);
+        if (dynamic_array->length > 0) {
+            memcpy(data, dynamic_array->items, items_offset);
+        }
+        dynamic_array->items = data;
+    }
+
+    dynamic_array->capacity *= 2;
+}
+
+#define dynamic_array_append(allocator, dynamic_array) \
+    ((dynamic_array)->length >= (dynamic_array)->capacity \
+     ? dynamic_array_grow(allocator, dynamic_array, sizeof(*(dynamic_array)->items)), \
+       (dynamic_array)->items + (dynamic_array)->length++ \
+     : (dynamic_array)->items + (dynamic_array)->length++)
+
+
+
+// ###################################
+// ### Maps ##########################
+// ###################################
+
+// typedef struct Map {
+//     void *data[];
+//     u64 length;
+//     u64 capacity;
+// }
