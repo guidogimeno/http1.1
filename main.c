@@ -4,10 +4,11 @@
 
 #include "strings.c"
 
-typedef struct Server {
-    u32 sockfd;
-    u32 clients[1];
-} Server;
+// #include <sys/resource.h>
+
+#define MAX_CONNECTIONS 1024
+#define MAX_EPOLL_EVENTS 32 // TODO: Ver si en compilacion o runtime se puede calcular en base a la PC
+#define ALLOCATOR_CHUNK_SIZE 4 * KB
 
 typedef struct Header {
     String field_name;
@@ -108,6 +109,7 @@ static String *headers_get(Headers_Map *headers_map, String field_name) {
     return NULL;
 }
 
+
 typedef enum Method {
     METHOD_GET,
     METHOD_PUT,
@@ -133,6 +135,19 @@ typedef struct Response {
     Headers_Map headers;
     Body body;
 } Response;
+
+typedef struct Connection {
+    s32 fd;
+    String host;
+    u16 port;
+
+    Request request;
+} Connection;
+
+typedef struct Server {
+    s32 server_fd;
+    Connection connections[MAX_CONNECTIONS];
+} Server;
 
 static String http_status_reason(u16 status) {
     switch (status) {
@@ -448,12 +463,6 @@ static void http_handler(Allocator *allocator, Request req, Response *res) {
     response_write(allocator, res, (u8 *)body.data, body.size);
 }
 
-typedef struct Connection {
-    s32 fd;
-    String host;
-    u16 port;
-} Connection;
-
 typedef struct ThreadArgs {
     Connection connection;
 } ThreadArgs;
@@ -524,27 +533,102 @@ void *handle_connection(void *arg) {
     return NULL;
 }
 
+static s32 epoll_events_add_file_descriptor(s32 epoll_fd, s32 fd, u32 events) {
+    struct epoll_event event;
+    event.events = EPOLLIN | EPOLLOUT | EPOLLET;
+    event.data.fd = fd;
+    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event);
+}
+
+// TODO: ver como hago con los clientes y los fds
+// static u32 get_rl_limit() {
+//     struct rlimit rl;
+//     getrlimit(RLIMIT_NOFILE, &rl);
+//     assert(rl.rlim_cur <= 1024 && "rl es muy alto");
+//     return rl.rlim_cur;
+// }
+
+typedef struct Ints {
+    s32 *items;
+    u64 length;
+    u64 capacity;
+} Ints;
+
 int main(int argc, char *argv[]) {
+    Allocator *a = allocator_make(1 * MB);
+
+    Ints ints = {0};
+    for (u32 i = 0; i < 300; i++) {
+        *dynamic_array_append(a, &ints) = (s32)i;
+    }
+    
+    for (u32 i = 0; i < ints.length; i++) {
+        // printf("valor: %d\n", ints.items[i]);
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     printf("Iniciando servidor..\n");
 
     // creacion del socket
-    u32 sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == -1) {
+    s32 server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == -1) {
         perror("error al crear socket");
         return -1;
     }
+
+    Server server = {0};
+    server.server_fd = server_fd;
     
     // address reutilizable, no hace falta esperar al TIME_WAIT
     u32 reuse = 1;
-    u32 res = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
+    u32 res = setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
     if (res == -1) {
         perror("error al realizar setsockopt(SO_REUSEADDR)");
         return -1;
     }
-    
-    Server server = {
-        .sockfd = sockfd
-    };
     
     // bind address al socket
     struct sockaddr_in server_addr = {
@@ -553,14 +637,14 @@ int main(int argc, char *argv[]) {
         .sin_addr.s_addr = inet_addr("127.0.0.1"),
     };
     
-    res = bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    res = bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
     if (res == -1) {
         perror("error al realizar el bind");
         return -1;
     }
     
     // escuchar a traves del socket
-    res = listen(sockfd, 1); // tamanio maximo de la cola de conexiones pendientes
+    res = listen(server_fd, MAX_CONNECTIONS); // tamanio maximo de la cola de conexiones pendientes
     if (res == -1) {
         perror("error al realizar el listen");
         return -1;
@@ -569,35 +653,116 @@ int main(int argc, char *argv[]) {
     String server_host = string(inet_ntoa(server_addr.sin_addr));
     u16 server_port = ntohs(server_addr.sin_port);
     printf("Servidor escuchando en: %.*s:%d\n", string_print(server_host), server_port);
+
+    // epoll
+    u32 epoll_fd = epoll_create(1);
+    struct epoll_event events[MAX_EPOLL_EVENTS];
+
+    res = epoll_events_add_file_descriptor(epoll_fd, server_fd, EPOLLIN | EPOLLOUT | EPOLLET);
+    if (res == -1) {
+        perror("error al agregar server_fd al epoll events");
+        return -1;
+    }
+    
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+
+    u32 file_descriptors_count;
+
+    Allocator *allocator = allocator_make(MAX_CONNECTIONS * ALLOCATOR_CHUNK_SIZE);
     
     // aceptar conexiones
     while (true) {
-        struct sockaddr_in client_addr;
-        socklen_t client_addr_len = sizeof(client_addr);
-    
-        s32 client_fd = accept(sockfd, (struct sockaddr *)&client_addr, &client_addr_len); // TODO: despues probar de hacer nonblocking
-        if (client_fd == -1) {
-            perror("error al aceptar cliente");
-            return -1; // TODO: manejar mejor este error
+        file_descriptors_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
+
+        for (u32 i = 0; i < file_descriptors_count; i++) {
+            if (events[i].data.fd == server_fd) {
+                // TODO: despues probar de hacer nonblocking
+                s32 client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+                if (client_fd == -1) {
+                    perror("error al aceptar cliente");
+                    return -1; // TODO: manejar mejor este error
+                }
+                
+                // non-blocking
+                res = fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
+                if (res == -1) {
+                    perror("error al setear el nonblocking");
+                    return -1; // TODO: manejar mejor este error
+                }
+
+                res = epoll_events_add_file_descriptor(epoll_fd, client_fd, EPOLLIN | EPOLLRDHUP | EPOLLHUP| EPOLLOUT);
+                if (res == -1) {
+                    perror("error al agregar server_fd al epoll events");
+                    return -1;
+                }
+
+                printf("FD del cliente: %d\n", client_fd);
+                Connection *connection = &server.connections[client_fd];
+                connection->fd = client_fd;
+                connection->host = string(inet_ntoa(client_addr.sin_addr));
+                connection->port = ntohs(client_addr.sin_port); 
+
+                printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
+
+            } else {
+                if (events[i].events & EPOLLIN) {
+                    Connection *connection = &server.connections[events[i].data.fd];
+
+                    u8 buf[8 * KB];
+                    Lexer lexer = {0};
+                    init_lexer(&lexer, buf, 8 * KB);
+
+                    while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
+                        s32 bytes_read = read(connection->fd, lexer.buf, lexer.capacity);
+                        if (bytes_read == 0) {
+                            printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
+                            break;
+                        } else if (bytes_read == -1) {
+                            perror("error al leer del cliente\n");
+                            break;
+                        }
+                        lexer.size = bytes_read - 1;
+
+                        Request request = {0};
+                        init_headers_map(&request.headers_map);
+
+                        Parse_Error err = parse_request_line(allocator, &lexer, &request);
+                        if (err) {
+                            handle_parse_error(allocator, connection->fd, err);
+                            break;
+                        }
+
+                        err = parse_headers(allocator, &lexer, &request);
+                        if (err) {
+                            handle_parse_error(allocator, connection->fd, err);
+                            break;
+                        }
+
+                        err = parse_body(allocator, &lexer, &request);
+                        if (err) {
+                            handle_parse_error(allocator, connection->fd, err);
+                            break;
+                        }
+
+                        connection->request = request;
+                        break; // TODO: buscar como leer por chunks o algo asi
+                    }
+                } else if (events[i].events & EPOLLOUT) {
+                    Connection *connection = &server.connections[events[i].data.fd];
+
+                    Response response = {0};
+                    init_headers_map(&response.headers);
+                    
+                    http_handler(allocator, connection->request, &response);
+                    
+                    connection_write(allocator, connection->fd, response);
+                }
+            }
         }
-        server.clients[0] = client_fd;
-
-        Connection connection = {0};
-        connection.fd = client_fd;
-        connection.host = string(inet_ntoa(client_addr.sin_addr));
-        connection.port = ntohs(client_addr.sin_port); 
-
-        printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection.host), connection.port);
-
-        pthread_t thread;
-        ThreadArgs thread_args = {0};
-        thread_args.connection = connection;
-
-        pthread_create(&thread, NULL, handle_connection, &thread_args);
-        pthread_join(thread, NULL);
     }
       
-    close(sockfd);
+    close(server_fd);
     
     return 0;
 }
