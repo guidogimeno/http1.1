@@ -6,6 +6,7 @@ usage() {
     echo "  build  : Compiles the project."
     echo "  debug  : Compiles the project with debugging symbols."
     echo "  clean  : Removes the compiled executable."
+    echo "  exp    : Run experiment."
     exit 1
 }
 
@@ -23,6 +24,14 @@ case "$1" in
     "debug")
         clang -g -std=c11 -Wall -Werror main.c -o main
         gdb -ex "tui enable" -ex "layout src" -ex "break main" ./main
+        ;;
+    "exp")
+        if [ -f "exp" ]; then
+            rm -f "exp"
+        fi
+        clang -O2 -std=c11 -Wall -Werror experimentos/main.c -o exp
+        ./exp
+        rm -f "exp"
         ;;
     "clean")
         if [ -f "main" ]; then

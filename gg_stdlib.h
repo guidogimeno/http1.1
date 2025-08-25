@@ -1,6 +1,205 @@
-String string(const char *text) {
-    return string_with_len(text, string_size(text));
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef uint8_t  u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+
+typedef int8_t  i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
+
+typedef float  f32;
+typedef double f64;
+
+#define KB 1024
+#define MB 1024 * KB
+#define GB 1024 * MB
+
+
+
+// ###################################
+// ### Allocators ####################
+// ###################################
+
+#define DEFAULT_ALIGNMENT (2*sizeof(void *))
+
+typedef struct Allocator {
+    u8  *data;
+    u64 size;
+    u64 capacity;
+} Allocator;
+
+typedef struct AllocatorTemp {
+    Allocator *allocator;
+    u32       position;
+} AllocatorTemp;
+
+#define MAX_SCRATCH_COUNT 2
+
+__thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
+
+
+Allocator *allocator_make(u64 capacity);
+void      *alloc(Allocator *allocator, u64 size);
+void      *alloc_aligned(Allocator *allocator, u64 size, size_t align);
+
+AllocatorTemp allocator_temp_begin(Allocator *allocator);
+void          allocator_temp_end(AllocatorTemp allocatorTemp);
+
+AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count);
+#define       release_scratch(t) allocator_temp_end(t)
+
+Allocator *allocator_make(u64 capacity) {
+    void *memory = malloc(sizeof(Allocator) + capacity);
+    Allocator *allocator = (Allocator *)memory;
+    allocator->data = memory + sizeof(Allocator);
+    allocator->capacity = capacity;
+    allocator->size = 0;
+    return allocator;
 }
+
+static bool is_power_of_two(uintptr_t x) {
+	return (x & (x-1)) == 0;
+}
+
+static uintptr_t align_forward(uintptr_t ptr, size_t align) {
+	uintptr_t p, a, modulo;
+
+	assert(is_power_of_two(align));
+
+	p = ptr;
+	a = (uintptr_t)align;
+	modulo = p & (a-1);
+
+	if (modulo != 0) {
+		p += a - modulo;
+	}
+	return p;
+}
+
+void *alloc(Allocator *allocator, u64 size) {
+    return alloc_aligned(allocator, size, DEFAULT_ALIGNMENT);
+}
+
+void *alloc_aligned(Allocator *allocator, u64 size, size_t align) {
+    uintptr_t current_ptr = (uintptr_t)allocator->data + (uintptr_t)allocator->size;
+    uintptr_t offset = align_forward(current_ptr, align);
+    offset -= (uintptr_t)allocator->data;
+
+    assert(offset + size <= allocator->capacity);
+
+    void *result = &allocator->data[offset];
+    allocator->size = offset + size;
+
+    memset(result, 0, size);
+
+    return result;
+}
+
+AllocatorTemp allocator_temp_begin(Allocator *allocator) {
+    AllocatorTemp allocatorTemp = {
+        .allocator = allocator,
+        .position = allocator->size,
+    };
+    return allocatorTemp;
+}
+
+void allocator_temp_end(AllocatorTemp allocatorTemp) {
+    allocatorTemp.allocator->size = allocatorTemp.position;
+}
+
+AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count) {
+    if (thread_local_allocators_pool[0] == 0) {
+        for (u32 i = 0; i < MAX_SCRATCH_COUNT; i++) {
+            thread_local_allocators_pool[i] = allocator_make(1024 * 1024); 
+        }
+    }
+
+    if (conflict_count == 0) {
+        return allocator_temp_begin(thread_local_allocators_pool[0]);
+    }
+
+    for (u32 pool_index = 0; pool_index < MAX_SCRATCH_COUNT; pool_index++) {
+        Allocator *allocator = thread_local_allocators_pool[pool_index];
+
+        bool is_free = true;
+        for (u32 conflict_index = 0; conflict_index < conflict_count; conflict_index++) {
+            if (allocator == conflicts[conflict_index]) {
+                is_free = false;
+                break;
+            }
+        }
+
+        if (is_free) {
+            return allocator_temp_begin(allocator);
+        }
+    }
+
+    return (AllocatorTemp){0};
+}
+
+
+
+
+
+// ###################################
+// ### Strings #######################
+// ###################################
+
+typedef struct String {
+    const char *data;
+    u32 size;
+} String;
+
+typedef struct String_Builder {
+    u8 *data;
+    u32 length;
+    u32 capacity;
+    Allocator *allocator;
+} String_Builder;
+
+#define STRING_BUILDER_DEFAULT_CAPACITY 32
+
+
+// String functions
+
+#define string(char_pointer) string_with_len(char_pointer, sizeof(char_pointer) - 1)
+
+// Como no son NULL terminated, esto hace que se puedan printear haciendo:
+// printf("%.*s", string_print(string));
+#define string_print(str) str.size, str.data
+
+String string_with_len(const char *text, u32 len);
+u32    string_size(const char *text);
+
+bool cstr_eq(char *s1, char *s2);
+bool string_eq(String s1, String s2);
+bool string_eq_cstr(String s1, char *s2);
+
+String string_to_lower(Allocator *a, String str);
+String string_to_upper(Allocator *a, String str);
+i64    string_to_int(String str);
+String string_from_int(Allocator *a, i64 num);
+
+String string_sub(Allocator *a, String *str, u32 start, u32 end); 
+String string_sub_cstr(Allocator *a, const char *text, u32 start, u32 end); 
+String string_slice(String *str, u32 start, u32 offset);
+
+char char_to_lower(char c);
+char char_to_upper(char c);
+
+// String_Builder functions
+void   sbuilder_init(String_Builder *builder, Allocator *allocator);
+void   sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity); 
+void   sbuilder_append(String_Builder *builder, String str);
+String sbuilder_to_string(String_Builder *sb);
 
 String string_with_len(const char *text, u32 len) {
     String str = {
@@ -26,32 +225,26 @@ u32 string_size(const char *text) {
     return i;
 }
 
-bool string_eq(String *s1, String *s2) {
-    assert(s1 != NULL);
-    assert(s2 != NULL);
-
-    if (s1->size != s2->size) {
+bool string_eq(String s1, String s2) {
+    if (s1.size != s2.size) {
         return false;
     }
     
-    for (u32 i = 0; i < s1->size; i++) {
-        if (s1->data[i] != s2->data[i]) {
+    for (u32 i = 0; i < s1.size; i++) {
+        if (s1.data[i] != s2.data[i]) {
             return false;
         }
     }
     return true;
 }
 
-bool string_eq_cstr(String *s1, char *s2) {
-    assert(s1 != NULL);
-    assert(s2 != NULL);
-
-    if (s1->size != string_size(s2)) {
+bool string_eq_cstr(String s1, char *s2) {
+    if (s1.size != string_size(s2)) {
         return false;
     }
     
-    for (u32 i = 0; i < s1->size; i++) {
-        if (s1->data[i] != s2[i]) {
+    for (u32 i = 0; i < s1.size; i++) {
+        if (s1.data[i] != s2[i]) {
             return false;
         }
     }
@@ -153,10 +346,10 @@ String string_to_upper(Allocator *a, String str) {
     return new_str;
 }
 
-s64 string_to_int(String str) {
+i64 string_to_int(String str) {
     u32 i = 0;
 
-    s32 sign;
+    i32 sign;
     if (str.data[i] == '-') {
         sign = -1;
         i++;
@@ -164,7 +357,7 @@ s64 string_to_int(String str) {
         sign = 1;
     }
 
-    s64 result = 0;
+    i64 result = 0;
     while (i < str.size) { 
         char c = str.data[i];
 
@@ -198,7 +391,7 @@ s64 string_to_int(String str) {
     return result * sign;
 }
 
-String string_from_int(Allocator *allocator, s64 num) {
+String string_from_int(Allocator *allocator, i64 num) {
     static const u64 powers_of_10[] = {
         1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL,
         10000000ULL, 100000000ULL, 1000000000ULL, 10000000000ULL,
@@ -351,5 +544,73 @@ String sbuilder_to_string(String_Builder *sb) {
         .size = sb->length,
     };
     return str;
+}
+
+
+
+// ###################################
+// ### Dynamic Arrays ################
+// ###################################
+
+typedef struct DynamicArray {
+    void *items;
+    u64 length;
+    u64 capacity;
+} DynamicArray;
+
+void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t item_size) {
+    DynamicArray *dynamic_array = (DynamicArray *)dynamic_array_ptr;
+
+    if (dynamic_array->capacity <= 0) {
+        dynamic_array->capacity = 1;
+    }
+
+    uintptr_t items_offset = dynamic_array->length * item_size;
+
+    if (allocator->data + allocator->size == dynamic_array->items + items_offset) {
+        alloc_aligned(allocator, dynamic_array->capacity * item_size, 1);
+    } else {
+        void *data = alloc(allocator, 2 * dynamic_array->capacity * item_size);
+        if (dynamic_array->length > 0) {
+            memcpy(data, dynamic_array->items, items_offset);
+        }
+        dynamic_array->items = data;
+    }
+
+    dynamic_array->capacity *= 2;
+}
+
+#define dynamic_array_append(allocator, dynamic_array) \
+    ((dynamic_array)->length >= (dynamic_array)->capacity \
+     ? dynamic_array_grow(allocator, dynamic_array, sizeof(*(dynamic_array)->items)), \
+       (dynamic_array)->items + (dynamic_array)->length++ \
+     : (dynamic_array)->items + (dynamic_array)->length++)
+
+
+
+
+// ###################################
+// ### Hashes ########################
+// ###################################
+
+// hash: djb2 - util para strings
+u64 hash_string(String s) {
+    u64 hash = 5381; // numero primo
+    for (u64 i = 0; i < s.size; i++) {
+        // (hash x 33) + ch = ((hash x 32) + hash) + ch
+        hash = ((hash << 5) + hash) + s.data[i];
+    }
+    return hash;
+}
+
+// hash: fnv1a - TODO: averiguar en QUE es bueno
+u64 hash_generic(void *data, size_t size) {
+    u64 hash = 14695981039346656037ULL;
+    u8 *bytes = (u8 *)data;
+    for (u64 i = 0; i < size; i++) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL; // numero primo
+    }
+    return hash;
 }
 

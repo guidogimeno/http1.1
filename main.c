@@ -1,14 +1,9 @@
+#include "gg_stdlib.h"
+
 #include "main.h"
-
-#include "strings.h"
-
-#include "strings.c"
-
-// #include <sys/resource.h>
 
 #define MAX_CONNECTIONS 1024
 #define MAX_EPOLL_EVENTS 32 // TODO: Ver si en compilacion o runtime se puede calcular en base a la PC
-#define ALLOCATOR_CHUNK_SIZE 4 * KB
 
 typedef struct Header {
     String field_name;
@@ -16,6 +11,7 @@ typedef struct Header {
     bool occupied;
 } Header;
 
+// TODO: Esto lo podria rehacer con slots y nodes
 #define MAX_HEADERS_CAPACITY 32 // osea que solo acepta hastas 12 headers
 typedef struct Headers_Map {
     Header headers[MAX_HEADERS_CAPACITY];
@@ -29,28 +25,18 @@ static void init_headers_map(Headers_Map *headers_map) {
     memset(headers_map->headers, 0, headers_map->capacity);
 }
 
-// djb2
-static u32 header_hash(String s) {
-    u32 hash = 5381; // numero primo
-    for (u32 i = 0; i < s.size; i++) {
-        // (hash x 33) + ch = ((hash x 32) + hash) + ch
-        hash = ((hash << 5) + hash) + s.data[i];
-    }
-    return hash;
-}
-
 static void headers_put(Headers_Map *headers_map, String field_name, String field_value) {
     u32 headers_cap = headers_map->capacity;
 
     // TODO: Esto deberia crecer
     assert(headers_map->length < (0.75 * headers_cap));
 
-    u32 header_index = header_hash(field_name) % headers_cap; 
+    u32 header_index = hash_string(field_name) % headers_cap; 
     Header *headers = headers_map->headers;
     Header *header = headers + header_index;
 
     bool is_occupied = header->occupied;
-    bool different_field_name = !string_eq(&header->field_name, &field_name); 
+    bool different_field_name = !string_eq(header->field_name, field_name); 
 
     if (is_occupied && different_field_name) {
         // tiene que pegar la vuelta
@@ -81,12 +67,12 @@ static void headers_put(Headers_Map *headers_map, String field_name, String fiel
 
 static String *headers_get(Headers_Map *headers_map, String field_name) {
     u32 headers_cap = headers_map->capacity;
-    u32 header_index = header_hash(field_name) % headers_cap; 
+    u32 header_index = hash_string(field_name) % headers_cap; 
 
     Header *headers = headers_map->headers;
     Header *header = headers + header_index;
 
-    if (string_eq(&header->field_name, &field_name)) {
+    if (string_eq(header->field_name, field_name)) {
         return &header->field_value;
     }
 
@@ -101,14 +87,13 @@ static String *headers_get(Headers_Map *headers_map, String field_name) {
         }
 
         header = &headers[header_index];
-        if (string_eq(&header->field_name, &field_name)) {
+        if (string_eq(header->field_name, field_name)) {
             return &header->field_value;
         }
     }
 
     return NULL;
 }
-
 
 typedef enum Method {
     METHOD_GET,
@@ -136,17 +121,34 @@ typedef struct Response {
     Body body;
 } Response;
 
+
 typedef struct Connection {
-    s32 fd;
+    i32 file_descriptor;
     String host;
     u16 port;
 
     Request request;
 } Connection;
 
+typedef struct Connection_Node Connection_Node;
+struct Connection_Node {
+    Connection_Node *next;
+
+    i32 key;
+
+    Connection connection;
+};
+
+typedef struct Connection_Slot {
+    Connection_Node *first;
+    Connection_Node *last;
+} Connection_Slot;
+
 typedef struct Server {
-    s32 server_fd;
-    Connection connections[MAX_CONNECTIONS];
+    i32 server_fd;
+
+    u32 connection_slots_count;
+    Connection_Slot *connection_slots;
 } Server;
 
 static String http_status_reason(u16 status) {
@@ -218,7 +220,7 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
 }
 
 typedef struct Lexer {
-    s32 fd;
+    i32 fd;
 
     u8 *buf;
     u32 capacity;
@@ -301,13 +303,13 @@ static Parse_Error parse_request_line(Allocator *allocator, Lexer *lexer, Reques
 
     // Method
     String method_str = string_sub_cstr(allocator, (char *)lexer->buf, 0, lexer->buf_position - 1);
-    if (string_eq_cstr(&method_str, "GET")) {
+    if (string_eq_cstr(method_str, "GET")) {
         request->method = METHOD_GET;
-    } else if (string_eq_cstr(&method_str, "PUT")) {
+    } else if (string_eq_cstr(method_str, "PUT")) {
         request->method = METHOD_PUT;
-    } else if (string_eq_cstr(&method_str, "POST")) {
+    } else if (string_eq_cstr(method_str, "POST")) {
         request->method = METHOD_POST;
-    } else if (string_eq_cstr(&method_str, "DELETE")) {
+    } else if (string_eq_cstr(method_str, "DELETE")) {
         request->method = METHOD_DELETE;
     } else {
         return PARSE_ERROR_INVALID_METHOD;
@@ -424,7 +426,7 @@ static Parse_Error parse_body(Allocator *allocator, Lexer *lexer, Request *reque
     String *content_length = headers_get(&request->headers_map, string("content-length"));
 
     if (content_length != NULL) {
-        s64 len = string_to_int(*content_length);
+        i64 len = string_to_int(*content_length);
         if (len > 4 * KB) { 
             return PARSE_ERROR_BODY_TOO_LARGE;
         }
@@ -436,7 +438,7 @@ static Parse_Error parse_body(Allocator *allocator, Lexer *lexer, Request *reque
     return PARSE_ERROR_NO_ERROR;
 }
 
-static void connection_write(Allocator *allocator, s32 fd, Response response) {
+static void connection_write(Allocator *allocator, i32 fd, Response response) {
     String encoded_response = encode_response(allocator, response);
 
     u32 bytes_written = write(fd, encoded_response.data, encoded_response.size);
@@ -445,7 +447,7 @@ static void connection_write(Allocator *allocator, s32 fd, Response response) {
     }
 }
 
-static void handle_parse_error(Allocator *allocator, s32 fd, Parse_Error err) {
+static void handle_parse_error(Allocator *allocator, i32 fd, Parse_Error err) {
     Response response = {0};
     response.status = 400;
     init_headers_map(&response.headers);
@@ -463,157 +465,68 @@ static void http_handler(Allocator *allocator, Request req, Response *res) {
     response_write(allocator, res, (u8 *)body.data, body.size);
 }
 
-typedef struct ThreadArgs {
-    Connection connection;
-} ThreadArgs;
-
-// TODO:
-// - Lectura Larga -> Keep Alive
-// - Lectura Corta
-void *handle_connection(void *arg) {
-    AllocatorTemp scratch = get_scratch(0, 0);
-    Allocator *allocator = scratch.allocator;
-
-    ThreadArgs *thread_args = (ThreadArgs *)arg;
-    Connection connection = thread_args->connection;
-    s32 client_fd = connection.fd;
-
-    u8 buf[8 * KB];
-    Lexer lexer = {0};
-    init_lexer(&lexer, buf, 8 * KB);
-
-    while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
-        s32 bytes_read = read(client_fd, lexer.buf, lexer.capacity);
-        if (bytes_read == 0) {
-            printf("el cliente cerro la conexion:%.*s\n", string_print(connection.host));
-            break;
-        } else if (bytes_read == -1) {
-            perror("error al leer del cliente\n");
-            break;
-        }
-        lexer.size = bytes_read - 1;
-
-        Request request = {0};
-        init_headers_map(&request.headers_map);
-
-        Parse_Error err = parse_request_line(allocator, &lexer, &request);
-        if (err) {
-            handle_parse_error(allocator, client_fd, err);
-            break;
-        }
-
-        err = parse_headers(allocator, &lexer, &request);
-        if (err) {
-            handle_parse_error(allocator, client_fd, err);
-            break;
-        }
-
-        err = parse_body(allocator, &lexer, &request);
-        if (err) {
-            handle_parse_error(allocator, client_fd, err);
-            break;
-        }
-
-        Response response = {0};
-        init_headers_map(&response.headers);
-
-        http_handler(allocator, request, &response);
-
-        connection_write(allocator, client_fd, response);
-    }
-
-    release_scratch(scratch);
-
-    if (close(client_fd) == -1) {
-        perror("error al cerrar el client_fd");
-        // TODO: ver como manejar este error
-        return NULL;
-    }
-
-    return NULL;
-}
-
-static s32 epoll_events_add_file_descriptor(s32 epoll_fd, s32 fd, u32 events) {
+static i32 epoll_events_add_file_descriptor(i32 epoll_fd, i32 fd, u32 events) {
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLOUT | EPOLLET;
     event.data.fd = fd;
     return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event);
 }
 
-// TODO: ver como hago con los clientes y los fds
-// static u32 get_rl_limit() {
-//     struct rlimit rl;
-//     getrlimit(RLIMIT_NOFILE, &rl);
-//     assert(rl.rlim_cur <= 1024 && "rl es muy alto");
-//     return rl.rlim_cur;
-// }
+static void server_put_connection(Allocator *allocator, Server *server, Connection connection) {
+    u64 hash = hash_generic((void *)&connection.file_descriptor, sizeof(connection.file_descriptor));
+    u32 index = hash % server->connection_slots_count;
+    Connection_Slot *slot = &server->connection_slots[index];
 
-typedef struct Ints {
-    s32 *items;
-    u64 length;
-    u64 capacity;
-} Ints;
-
-int main(int argc, char *argv[]) {
-    Allocator *a = allocator_make(1 * MB);
-
-    Ints ints = {0};
-    for (u32 i = 0; i < 300; i++) {
-        *dynamic_array_append(a, &ints) = (s32)i;
+    bool node_found = false;
+    for (Connection_Node *node = slot->first; node != NULL; node = node->next) {
+        if (node->key == connection.file_descriptor) {
+            node_found = true;
+            node->connection = connection;
+            break;
+        }
     }
     
-    for (u32 i = 0; i < ints.length; i++) {
-        // printf("valor: %d\n", ints.items[i]);
+    if (!node_found) {
+        Connection_Node *new_node = alloc(allocator, sizeof(Connection_Node));
+        new_node->key = connection.file_descriptor;
+        new_node->connection = connection;
+        new_node->next = NULL;
+
+        if (slot->first == NULL) {
+            slot->first = new_node;
+            slot->last = new_node;
+        } else {
+            slot->last->next = new_node;
+            slot->last = new_node;
+        }
     }
+}
 
+// TODO: hacer la parte de remover
+// static void server_remove_connection(Server *server, i32 file_descriptor) {
+// }
 
+static Connection *server_get_connection(Server *server, i32 file_descriptor) {
+    u64 hash = hash_generic((void *)&file_descriptor, sizeof(file_descriptor));
+    u32 index = hash % server->connection_slots_count;
+    Connection_Slot *slot = &server->connection_slots[index];
 
+    for (Connection_Node *node = slot->first; node != NULL; node = node->next) {
+        if (node->key == file_descriptor) {
+            return &node->connection;
+        }
+    }
+    
+    return NULL;
+};
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+int main(int argc, char *argv[]) {
     printf("Iniciando servidor..\n");
 
+    Allocator *allocator = allocator_make(1 * GB);
+
     // creacion del socket
-    s32 server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    i32 server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         perror("error al crear socket");
         return -1;
@@ -621,6 +534,8 @@ int main(int argc, char *argv[]) {
 
     Server server = {0};
     server.server_fd = server_fd;
+    server.connection_slots_count = MAX_CONNECTIONS;
+    server.connection_slots = alloc(allocator, sizeof(Connection_Slot) * server.connection_slots_count);
     
     // address reutilizable, no hace falta esperar al TIME_WAIT
     u32 reuse = 1;
@@ -667,9 +582,7 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
 
-    u32 file_descriptors_count;
-
-    Allocator *allocator = allocator_make(MAX_CONNECTIONS * ALLOCATOR_CHUNK_SIZE);
+    u32 file_descriptors_count = 0;
     
     // aceptar conexiones
     while (true) {
@@ -677,8 +590,7 @@ int main(int argc, char *argv[]) {
 
         for (u32 i = 0; i < file_descriptors_count; i++) {
             if (events[i].data.fd == server_fd) {
-                // TODO: despues probar de hacer nonblocking
-                s32 client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+                i32 client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
                 if (client_fd == -1) {
                     perror("error al aceptar cliente");
                     return -1; // TODO: manejar mejor este error
@@ -697,67 +609,66 @@ int main(int argc, char *argv[]) {
                     return -1;
                 }
 
-                printf("FD del cliente: %d\n", client_fd);
-                Connection *connection = &server.connections[client_fd];
-                connection->fd = client_fd;
+                Connection *connection = alloc(allocator, sizeof(Connection));
+                connection->file_descriptor = client_fd;
                 connection->host = string(inet_ntoa(client_addr.sin_addr));
                 connection->port = ntohs(client_addr.sin_port); 
 
+                server_put_connection(allocator, &server, *connection);
+
                 printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
 
-            } else {
-                if (events[i].events & EPOLLIN) {
-                    Connection *connection = &server.connections[events[i].data.fd];
+            } else if (events[i].events & EPOLLIN) {
+                Connection *connection = server_get_connection(&server, events[i].data.fd);
 
-                    u8 buf[8 * KB];
-                    Lexer lexer = {0};
-                    init_lexer(&lexer, buf, 8 * KB);
+                u8 buf[8 * KB];
+                Lexer lexer = {0};
+                init_lexer(&lexer, buf, 8 * KB);
 
-                    while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
-                        s32 bytes_read = read(connection->fd, lexer.buf, lexer.capacity);
-                        if (bytes_read == 0) {
-                            printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
-                            break;
-                        } else if (bytes_read == -1) {
-                            perror("error al leer del cliente\n");
-                            break;
-                        }
-                        lexer.size = bytes_read - 1;
-
-                        Request request = {0};
-                        init_headers_map(&request.headers_map);
-
-                        Parse_Error err = parse_request_line(allocator, &lexer, &request);
-                        if (err) {
-                            handle_parse_error(allocator, connection->fd, err);
-                            break;
-                        }
-
-                        err = parse_headers(allocator, &lexer, &request);
-                        if (err) {
-                            handle_parse_error(allocator, connection->fd, err);
-                            break;
-                        }
-
-                        err = parse_body(allocator, &lexer, &request);
-                        if (err) {
-                            handle_parse_error(allocator, connection->fd, err);
-                            break;
-                        }
-
-                        connection->request = request;
-                        break; // TODO: buscar como leer por chunks o algo asi
+                while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
+                    i32 bytes_read = read(connection->file_descriptor, lexer.buf, lexer.capacity);
+                    if (bytes_read == 0) {
+                        printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
+                        break;
+                    } else if (bytes_read == -1) {
+                        perror("error al leer del cliente\n");
+                        break;
                     }
-                } else if (events[i].events & EPOLLOUT) {
-                    Connection *connection = &server.connections[events[i].data.fd];
+                    lexer.size = bytes_read - 1;
 
-                    Response response = {0};
-                    init_headers_map(&response.headers);
-                    
-                    http_handler(allocator, connection->request, &response);
-                    
-                    connection_write(allocator, connection->fd, response);
+                    Request request = {0};
+                    init_headers_map(&request.headers_map);
+
+                    Parse_Error err = parse_request_line(allocator, &lexer, &request);
+                    if (err) {
+                        handle_parse_error(allocator, connection->file_descriptor, err);
+                        break;
+                    }
+
+                    err = parse_headers(allocator, &lexer, &request);
+                    if (err) {
+                        handle_parse_error(allocator, connection->file_descriptor, err);
+                        break;
+                    }
+
+                    err = parse_body(allocator, &lexer, &request);
+                    if (err) {
+                        handle_parse_error(allocator, connection->file_descriptor, err);
+                        break;
+                    }
+
+                    connection->request = request;
+                    break; // TODO: buscar como leer por chunks o algo asi
                 }
+            } else if (events[i].events & EPOLLOUT) {
+                Connection *connection = server_get_connection(&server, events[i].data.fd);
+
+                Response response = {0};
+                init_headers_map(&response.headers);
+                
+                http_handler(allocator, connection->request, &response);
+                
+                connection_write(allocator, connection->file_descriptor, response);
             }
         }
     }
