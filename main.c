@@ -3,7 +3,7 @@
 #include "main.h"
 
 #define MAX_CONNECTIONS 1024
-#define MAX_EPOLL_EVENTS 32 // TODO: Ver si en compilacion o runtime se puede calcular en base a la PC
+#define MAX_EPOLL_EVENTS 32
 
 typedef struct Header {
     String field_name;
@@ -11,15 +11,14 @@ typedef struct Header {
     bool occupied;
 } Header;
 
-// TODO: Esto lo podria rehacer con slots y nodes
-#define MAX_HEADERS_CAPACITY 32 // osea que solo acepta hastas 12 headers
+#define MAX_HEADERS_CAPACITY 32
 typedef struct Headers_Map {
     Header headers[MAX_HEADERS_CAPACITY];
     u32 length;
     u32 capacity;
 } Headers_Map;
 
-static void init_headers_map(Headers_Map *headers_map) {
+static void headers_map_init(Headers_Map *headers_map) {
     headers_map->length = 0;
     headers_map->capacity = MAX_HEADERS_CAPACITY;
     memset(headers_map->headers, 0, headers_map->capacity);
@@ -123,33 +122,22 @@ typedef struct Response {
 
 
 typedef struct Connection {
+    Allocator *allocator;
+
     i32 file_descriptor;
     String host;
     u16 port;
 
+    bool is_active;
+
     Request request;
 } Connection;
 
-typedef struct Connection_Node Connection_Node;
-struct Connection_Node {
-    Connection_Node *next;
-    Connection_Node *prev;
-
-    i32 key;
-
-    Connection connection;
-};
-
-typedef struct Connection_Slot {
-    Connection_Node *first;
-    Connection_Node *last;
-} Connection_Slot;
-
 typedef struct Server {
-    i32 server_fd;
+    i32 file_descriptor;
 
-    u32 connection_slots_count;
-    Connection_Slot *connection_slots;
+    u32 connections_count;
+    Connection *connections;
 } Server;
 
 static String http_status_reason(u16 status) {
@@ -451,7 +439,7 @@ static void connection_write(Allocator *allocator, i32 fd, Response response) {
 static void handle_parse_error(Allocator *allocator, i32 fd, Parse_Error err) {
     Response response = {0};
     response.status = 400;
-    init_headers_map(&response.headers);
+    headers_map_init(&response.headers);
 
     const char *error_message = parse_error_messages[err];
     response_write(allocator, &response, (u8 *)error_message, string_size(error_message));
@@ -491,88 +479,58 @@ static i32 set_nonblocking(i32 fd) {
 }
 
 
+static void init_server(Allocator *allocator, Server *server, i32 file_descriptor, u32 max_connections) {
+    server->file_descriptor = file_descriptor;
+    server->connections_count = max_connections;
+    server->connections = allocator_alloc(allocator, sizeof(Connection) * max_connections);
+}
+
 
 // Connections
+static void init_connection(Connection *connection, i32 file_descriptor, struct sockaddr_in address) {
+    connection->file_descriptor = file_descriptor;
+    connection->host = string(inet_ntoa(address.sin_addr));
+    connection->port = ntohs(address.sin_port); 
+    connection->is_active = false;
+    memset(&connection->request, 0, sizeof(Connection));
 
-static void server_put_connection(Allocator *allocator, Server *server, i32 file_descriptor, Connection connection) {
-    u64 hash = hash_generic((void *)&file_descriptor, sizeof(file_descriptor));
-    u32 index = hash % server->connection_slots_count;
-    Connection_Slot *slot = &server->connection_slots[index];
-
-    bool node_found = false;
-    for (Connection_Node *node = slot->first; node != NULL; node = node->next) {
-        if (node->key == file_descriptor) {
-            node_found = true;
-            node->connection = connection;
-            break;
-        }
-    }
-    
-    if (!node_found) {
-        Connection_Node *new_node = alloc(allocator, sizeof(Connection_Node));
-        new_node->key = file_descriptor;
-        new_node->connection = connection;
-        new_node->prev = NULL;
-        new_node->next = NULL;
-
-        if (slot->first == NULL) {
-            slot->first = new_node;
-            slot->last = new_node;
-        } else {
-            slot->last->next = new_node;
-            new_node->prev = slot->last;
-            slot->last = new_node;
-        }
+    if (connection->allocator == NULL) {
+        connection->allocator = allocator_make(1 * MB) ;
+    } else {
+        allocator_reset(connection->allocator);
     }
 }
 
-static Connection *server_get_connection(Server *server, i32 file_descriptor) {
-    u64 hash = hash_generic((void *)&file_descriptor, sizeof(file_descriptor));
-    u32 index = hash % server->connection_slots_count;
-    Connection_Slot *slot = &server->connection_slots[index];
-
-    for (Connection_Node *node = slot->first; node != NULL; node = node->next) {
-        if (node->key == file_descriptor) {
-            return &node->connection;
+static Connection *server_find_connection(Server *server, i32 file_descriptor) {
+    for (u32 i = 0; i < server->connections_count; i++) {
+        if (server->connections[i].file_descriptor == file_descriptor) {
+            return &server->connections[i];
         }
     }
-    
+
     return NULL;
-};
-
-static void server_remove_connection(Server *server, i32 file_descriptor) {
-    u64 hash = hash_generic((void *)&file_descriptor, sizeof(file_descriptor));
-    u32 index = hash % server->connection_slots_count;
-    Connection_Slot *slot = &server->connection_slots[index];
-
-    for (Connection_Node *node = slot->first; node != NULL; node = node->next) {
-        if (node->key == file_descriptor) {
-            if (slot->first == node) {
-                slot->first = node->next;
-            } 
-
-            if (slot->last == node) {
-                slot->last = node->prev;
-            } 
-
-            if (node->prev != NULL) {
-                node->prev->next = node->next;
-            }
-
-            if (node->next != NULL) {
-                node->next->prev = node->prev;
-            }
-        }
-    }
 }
 
+static Connection *server_find_free_connection(Server *server) {
+    for (u32 i = 0; i < server->connections_count; i++) {
+        if (server->connections[i].is_active == false) {
+            return &server->connections[i];
+        }
+    }
 
+    return NULL;
+}
 
 
 int main(int argc, char *argv[]) {
     printf("Iniciando servidor..\n");
 
     Allocator *allocator = allocator_make(1 * GB);
+
+    struct epoll_event events[MAX_EPOLL_EVENTS];
+
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
 
     // creacion del socket
     i32 server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -581,10 +539,8 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    Server server = {0};
-    server.server_fd = server_fd;
-    server.connection_slots_count = MAX_CONNECTIONS;
-    server.connection_slots = alloc(allocator, sizeof(Connection_Slot) * server.connection_slots_count);
+    Server server;
+    init_server(allocator, &server, server_fd, MAX_CONNECTIONS);
     
     // address reutilizable, no hace falta esperar al TIME_WAIT
     u32 reuse = 1;
@@ -616,8 +572,6 @@ int main(int argc, char *argv[]) {
     printf("Servidor escuchando en: %.*s:%d\n", string_print(server_host), server_port);
 
     // epoll
-    struct epoll_event events[MAX_EPOLL_EVENTS];
-
     i32 epoll_fd = epoll_create1(0);
     if (epoll_fd == -1) {
         exit(EXIT_FAILURE);
@@ -628,12 +582,8 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
     
-    struct sockaddr_in client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
-
-    i32 file_descriptors_count = 0;
-    
     // aceptar conexiones
+    i32 file_descriptors_count = 0;
     while (true) {
         file_descriptors_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
         if (file_descriptors_count == -1) {
@@ -661,17 +611,19 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                // TODO: armar pull de conexiones
-                Connection *connection = alloc(allocator, sizeof(Connection));
-                connection->file_descriptor = client_fd;
-                connection->host = string(inet_ntoa(client_addr.sin_addr));
-                connection->port = ntohs(client_addr.sin_port); 
+                Connection *connection = server_find_free_connection(&server);
+                if (connection == NULL) {
+                    perror("no hay conexiones libres");
+                    close(client_fd);
+                    continue;
+                }
 
-                server_put_connection(allocator, &server, client_fd, *connection);
+                init_connection(connection, client_fd, client_addr);
+                connection->is_active = true;
 
                 printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
             } else {
-                Connection *connection = server_get_connection(&server, events[i].data.fd);
+                Connection *connection = server_find_connection(&server, events[i].data.fd);
                 if (connection == NULL) {
                     perror("no se logro encontrar la conexion en el pool de conexiones");
 
@@ -687,7 +639,9 @@ int main(int argc, char *argv[]) {
                 Lexer lexer = {0};
                 init_lexer(&lexer, buf, 8 * KB);
 
-                while (true) { // TODO: Deberia ser un while(1) si fuera un keep alive? o siempre?
+                while (true) {
+                    // TODO: Tengo que leer todo lo que hay, sino se puede bugguear
+                    // De hecho se esta buggueando y creo que es esto
                     i32 bytes_read = read(connection->file_descriptor, lexer.buf, lexer.capacity);
                     if (bytes_read == 0) {
                         printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
@@ -698,45 +652,42 @@ int main(int argc, char *argv[]) {
                     }
                     lexer.size = bytes_read - 1;
 
-                    Request request = {0};
-                    init_headers_map(&request.headers_map);
+                    Request *request = &connection->request;
+                    headers_map_init(&request->headers_map);
 
-                    Parse_Error err = parse_request_line(allocator, &lexer, &request);
+                    Parse_Error err = parse_request_line(allocator, &lexer, request);
                     if (err) {
                         handle_parse_error(allocator, connection->file_descriptor, err);
                         break;
                     }
 
-                    err = parse_headers(allocator, &lexer, &request);
+                    err = parse_headers(allocator, &lexer, request);
                     if (err) {
                         handle_parse_error(allocator, connection->file_descriptor, err);
                         break;
                     }
 
-                    err = parse_body(allocator, &lexer, &request);
+                    err = parse_body(allocator, &lexer, request);
                     if (err) {
                         handle_parse_error(allocator, connection->file_descriptor, err);
                         break;
                     }
-
-                    connection->request = request;
-
-                    Connection *connection = server_get_connection(&server, events[i].data.fd);
 
                     Response response = {0};
-                    init_headers_map(&response.headers);
+                    headers_map_init(&response.headers);
 
-                    http_handler(allocator, connection->request, &response);
+                    http_handler(allocator, *request, &response);
 
                     connection_write(allocator, connection->file_descriptor, response);
 
-                    printf("Cerrando conexion..\n");
+                    connection->is_active = false;
 
                     if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
 
-                    server_remove_connection(&server, connection->file_descriptor);
+                    printf("Conexion cerrada\n");
+
                     close(connection->file_descriptor);
 
                     break;

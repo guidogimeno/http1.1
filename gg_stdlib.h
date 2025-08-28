@@ -47,8 +47,9 @@ __thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
 
 
 Allocator *allocator_make(u64 capacity);
-void      *alloc(Allocator *allocator, u64 size);
-void      *alloc_aligned(Allocator *allocator, u64 size, size_t align);
+void      *allocator_alloc(Allocator *allocator, u64 size);
+void      *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align);
+void      allocator_reset(Allocator *allocator);
 
 AllocatorTemp allocator_temp_begin(Allocator *allocator);
 void          allocator_temp_end(AllocatorTemp allocatorTemp);
@@ -84,11 +85,11 @@ static uintptr_t align_forward(uintptr_t ptr, size_t align) {
 	return p;
 }
 
-void *alloc(Allocator *allocator, u64 size) {
-    return alloc_aligned(allocator, size, DEFAULT_ALIGNMENT);
+void *allocator_alloc(Allocator *allocator, u64 size) {
+    return alloctor_alloc_aligned(allocator, size, DEFAULT_ALIGNMENT);
 }
 
-void *alloc_aligned(Allocator *allocator, u64 size, size_t align) {
+void *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align) {
     uintptr_t current_ptr = (uintptr_t)allocator->data + (uintptr_t)allocator->size;
     uintptr_t offset = align_forward(current_ptr, align);
     offset -= (uintptr_t)allocator->data;
@@ -101,6 +102,10 @@ void *alloc_aligned(Allocator *allocator, u64 size, size_t align) {
     memset(result, 0, size);
 
     return result;
+}
+
+void allocator_reset(Allocator *allocator) {
+    allocator->size = 0;
 }
 
 AllocatorTemp allocator_temp_begin(Allocator *allocator) {
@@ -280,7 +285,7 @@ String string_sub_cstr(Allocator *a, const char *text, u32 start, u32 end) {
 
     u32 len = end - start + 1;
 
-    char *dest = (char *)alloc(a, len);
+    char *dest = (char *)allocator_alloc(a, len);
     dest = memcpy(dest, text + start, len);
 
     String str = {
@@ -306,7 +311,7 @@ String string_slice(String *str, u32 start, u32 offset) {
 
 String string_to_lower(Allocator *a, String str) {
 
-    char *dest = (char *)alloc(a, str.size);
+    char *dest = (char *)allocator_alloc(a, str.size);
 
     for (u32 i = 0; i < str.size; i++) {
         char c = str.data[i];
@@ -327,7 +332,7 @@ String string_to_lower(Allocator *a, String str) {
 
 String string_to_upper(Allocator *a, String str) {
 
-    char *dest = (char *)alloc(a, str.size);
+    char *dest = (char *)allocator_alloc(a, str.size);
 
     for (u32 i = 0; i < str.size; i++) {
         char c = str.data[i];
@@ -426,19 +431,19 @@ String string_from_int(Allocator *allocator, i64 num) {
     static const char int64_max_str[] = "9223372036854775807";
 
     if (num == 0) {
-        char *buf = (char *)alloc(allocator, 1);
+        char *buf = (char *)allocator_alloc(allocator, 1);
         buf[0] = '0';
         String str = { .data = buf, .size = 1 };
         return str;
     }
     if (num == INT64_MIN) {
-        char *buf = (char *)alloc(allocator, 20);
+        char *buf = (char *)allocator_alloc(allocator, 20);
         for (int i = 0; i < 20; i++) buf[i] = int64_min_str[i];
         String str = { .data = buf, .size = 20 };
         return str;
     }
     if (num == INT64_MAX) {
-        char *buf = (char *)alloc(allocator, 19);
+        char *buf = (char *)allocator_alloc(allocator, 19);
         for (int i = 0; i < 19; i++) buf[i] = int64_max_str[i];
         String str = { .data = buf, .size = 19 };
         return str;
@@ -454,7 +459,7 @@ String string_from_int(Allocator *allocator, i64 num) {
         }
     }
 
-    char *buf = (char *)alloc(allocator, length);
+    char *buf = (char *)allocator_alloc(allocator, length);
     u32 i = length - 1;
 
     while (abs_num >= 100) {
@@ -504,7 +509,7 @@ void sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capaci
     builder->allocator = allocator;
 
     if (capacity > 0) {
-        builder->data = alloc(allocator, capacity);
+        builder->data = allocator_alloc(allocator, capacity);
     }
 }
 
@@ -524,7 +529,7 @@ void sbuilder_append(String_Builder *builder, String str) {
 
         printf("realocacion - capacidad anterior: %d capacidad nueva: %d\n", builder->capacity, new_capacity);
 
-        u8 *new_data = alloc(builder->allocator, new_capacity);
+        u8 *new_data = allocator_alloc(builder->allocator, new_capacity);
 
         memcpy(new_data, builder->data, builder->length);
 
@@ -568,9 +573,9 @@ void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t it
     uintptr_t items_offset = dynamic_array->length * item_size;
 
     if (allocator->data + allocator->size == dynamic_array->items + items_offset) {
-        alloc_aligned(allocator, dynamic_array->capacity * item_size, 1);
+        alloctor_alloc_aligned(allocator, dynamic_array->capacity * item_size, 1);
     } else {
-        void *data = alloc(allocator, 2 * dynamic_array->capacity * item_size);
+        void *data = allocator_alloc(allocator, 2 * dynamic_array->capacity * item_size);
         if (dynamic_array->length > 0) {
             memcpy(data, dynamic_array->items, items_offset);
         }

@@ -38,7 +38,7 @@ void insert(Allocator *allocator, Manager *mgr, String key, Foo foo) {
     }
 
     if (!node_found) {
-        Node *new_node = alloc(allocator, sizeof(Node));
+        Node *new_node = allocator_alloc(allocator, sizeof(Node));
         new_node->key = key;
         new_node->foo = foo;
         new_node->prev = NULL;
@@ -101,7 +101,7 @@ int main() {
     { // remove al vacio
         Manager mgr = {
             .slots_count = 10,
-            .slots = alloc(allocator, sizeof(Slot) * 10),
+            .slots = allocator_alloc(allocator, sizeof(Slot) * 10),
         };
 
         remove_item(&mgr, string("primero"));
@@ -112,7 +112,7 @@ int main() {
     { // insert varios
         Manager mgr = {
             .slots_count = 10,
-            .slots = alloc(allocator, sizeof(Slot) * 10),
+            .slots = allocator_alloc(allocator, sizeof(Slot) * 10),
         };
 
         insert(allocator, &mgr, string("primero"), (Foo){ .bar = 1 });
@@ -130,7 +130,7 @@ int main() {
     { // insert remove insert
         Manager mgr = {
             .slots_count = 10,
-            .slots = alloc(allocator, sizeof(Slot) * 10),
+            .slots = allocator_alloc(allocator, sizeof(Slot) * 10),
         };
 
         insert(allocator, &mgr, string("primero"), (Foo){ .bar = 1 });
