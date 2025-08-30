@@ -104,7 +104,7 @@ int main() {
             .slots = allocator_alloc(allocator, sizeof(Slot) * 10),
         };
 
-        remove_item(&mgr, string("primero"));
+        remove_item(&mgr, string_lit("primero"));
 
         print(mgr);
     }
@@ -115,14 +115,14 @@ int main() {
             .slots = allocator_alloc(allocator, sizeof(Slot) * 10),
         };
 
-        insert(allocator, &mgr, string("primero"), (Foo){ .bar = 1 });
-        insert(allocator, &mgr, string("segundo"), (Foo){ .bar = 1 });
+        insert(allocator, &mgr, string_lit("primero"), (Foo){ .bar = 1 });
+        insert(allocator, &mgr, string_lit("segundo"), (Foo){ .bar = 1 });
 
-        remove_item(&mgr, string("primero"));
-        remove_item(&mgr, string("segundo"));
+        remove_item(&mgr, string_lit("primero"));
+        remove_item(&mgr, string_lit("segundo"));
 
-        insert(allocator, &mgr, string("sexto"), (Foo){ .bar = 1 });
-        insert(allocator, &mgr, string("septimo"), (Foo){ .bar = 1 });
+        insert(allocator, &mgr, string_lit("sexto"), (Foo){ .bar = 1 });
+        insert(allocator, &mgr, string_lit("septimo"), (Foo){ .bar = 1 });
 
         print(mgr);
     }
@@ -133,9 +133,9 @@ int main() {
             .slots = allocator_alloc(allocator, sizeof(Slot) * 10),
         };
 
-        insert(allocator, &mgr, string("primero"), (Foo){ .bar = 1 });
-        remove_item(&mgr, string("primero"));
-        insert(allocator, &mgr, string("primero"), (Foo){ .bar = 2 });
+        insert(allocator, &mgr, string_lit("primero"), (Foo){ .bar = 1 });
+        remove_item(&mgr, string_lit("primero"));
+        insert(allocator, &mgr, string_lit("primero"), (Foo){ .bar = 2 });
 
         print(mgr);
     }

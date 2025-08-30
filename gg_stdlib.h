@@ -175,12 +175,13 @@ typedef struct String_Builder {
 
 // String functions
 
-#define string(char_pointer) string_with_len(char_pointer, sizeof(char_pointer) - 1)
+#define string_lit(char_pointer) string_with_len(char_pointer, sizeof(char_pointer) - 1)
 
 // Como no son NULL terminated, esto hace que se puedan printear haciendo:
 // printf("%.*s", string_print(string));
 #define string_print(str) str.size, str.data
 
+String string(const char *text);
 String string_with_len(const char *text, u32 len);
 u32    string_size(const char *text);
 
@@ -205,6 +206,10 @@ void   sbuilder_init(String_Builder *builder, Allocator *allocator);
 void   sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity); 
 void   sbuilder_append(String_Builder *builder, String str);
 String sbuilder_to_string(String_Builder *sb);
+
+String string(const char *text) {
+    return string_with_len(text, string_size(text));
+}
 
 String string_with_len(const char *text, u32 len) {
     String str = {

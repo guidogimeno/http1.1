@@ -2,6 +2,9 @@
 
 #include "main.h"
 
+#define HTTP_VERSION_10 string_lit("HTTP/1.0")
+#define HTTP_VERSION_11 string_lit("HTTP/1.1")
+
 #define MAX_CONNECTIONS 1024
 #define MAX_EPOLL_EVENTS 32
 
@@ -142,19 +145,19 @@ typedef struct Server {
 
 static String http_status_reason(u16 status) {
     switch (status) {
-        case 200: return string("Ok");
-        case 201: return string("Created");
-        case 400: return string("Bad Request");
-        default: return string("Unknown");
+        case 200: return string_lit("Ok");
+        case 201: return string_lit("Created");
+        case 400: return string_lit("Bad Request");
+        default: return string_lit("Unknown");
     }
 }
 
 static String encode_response(Allocator *allocator, Response response) {
-    String line_separator = string("\r\n");
-    String colon_separator = string(": ");
-    String space_separator = string(" ");
+    String line_separator = string_lit("\r\n");
+    String colon_separator = string_lit(": ");
+    String space_separator = string_lit(" ");
 
-    String version = string("HTTP/1.1 ");
+    String version = string_lit("HTTP/1.1 ");
     String status = string_from_int(allocator, response.status);
     String status_description = http_status_reason(response.status);
     String body = string_with_len((char *)response.body.data, response.body.length);
@@ -202,7 +205,7 @@ static String encode_response(Allocator *allocator, Response response) {
 }
 
 static void response_write(Allocator *allocator, Response *response, u8 *content, u32 length) {
-    headers_put(&response->headers, string("content-length"), string_from_int(allocator, length));
+    headers_put(&response->headers, string_lit("content-length"), string_from_int(allocator, length));
 
     response->body.data = content;
     response->body.length = length;
@@ -288,17 +291,15 @@ static Parse_Error parse_request_line(Allocator *allocator, Lexer *lexer, Reques
         read_char(lexer);
     } while (is_letter(lexer->current_char));
 
-    request->version = string("HTTP/1.1");
-
     // Method
     String method_str = string_sub_cstr(allocator, (char *)lexer->buf, 0, lexer->buf_position - 1);
-    if (string_eq_cstr(method_str, "GET")) {
+    if (string_eq(method_str, string_lit("GET"))) {
         request->method = METHOD_GET;
-    } else if (string_eq_cstr(method_str, "PUT")) {
+    } else if (string_eq(method_str, string_lit("PUT"))) {
         request->method = METHOD_PUT;
-    } else if (string_eq_cstr(method_str, "POST")) {
+    } else if (string_eq(method_str, string_lit("POST"))) {
         request->method = METHOD_POST;
-    } else if (string_eq_cstr(method_str, "DELETE")) {
+    } else if (string_eq(method_str, string_lit("DELETE"))) {
         request->method = METHOD_DELETE;
     } else {
         return PARSE_ERROR_INVALID_METHOD;
@@ -313,7 +314,10 @@ static Parse_Error parse_request_line(Allocator *allocator, Lexer *lexer, Reques
     u32 uri_start = lexer->read_position;
     do {
         read_char(lexer);
-    } while(is_alphanum(lexer->current_char) || lexer->current_char == '/');
+    } while (is_alphanum(lexer->current_char) || 
+             lexer->current_char == '/' ||
+             lexer->current_char == '.'
+    );
 
     if (lexer->buf_position == uri_start) {
         return PARSE_ERROR_INVALID_URI;
@@ -326,13 +330,23 @@ static Parse_Error parse_request_line(Allocator *allocator, Lexer *lexer, Reques
         return PARSE_ERROR_MALFORMED_REQUEST_LINE;
     }
 
-    for (u32 i = 0; i < 8; i++) { // len(HTTP/1.1)
+    // Version
+    u32 version_size = 8; // len(HTTP/x.y)
+    char *version_data = allocator_alloc(allocator, version_size);
+    for (u32 i = 0; i < version_size; i++) { 
         read_char(lexer);
-        if (request->version.data[i] != lexer->current_char) {
-            return PARSE_ERROR_INVALID_VERSION;
-        }
+        version_data[i] = lexer->current_char;
     }
 
+    request->version = string_with_len(version_data, version_size);
+
+    if (!string_eq(request->version, HTTP_VERSION_10) && 
+        !string_eq(request->version, HTTP_VERSION_11)
+    ) {
+        return PARSE_ERROR_INVALID_VERSION;
+    }
+
+    // EOL
     read_char(lexer);
     if (lexer->current_char != '\r') {
         return PARSE_ERROR_MALFORMED_REQUEST_LINE;
@@ -412,7 +426,7 @@ static Parse_Error parse_headers(Allocator *allocator, Lexer *lexer, Request *re
 }
 
 static Parse_Error parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
-    String *content_length = headers_get(&request->headers_map, string("content-length"));
+    String *content_length = headers_get(&request->headers_map, string_lit("content-length"));
 
     if (content_length != NULL) {
         i64 len = string_to_int(*content_length);
@@ -645,6 +659,13 @@ int main(int argc, char *argv[]) {
                     i32 bytes_read = read(connection->file_descriptor, lexer.buf, lexer.capacity);
                     if (bytes_read == 0) {
                         printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
+
+                        // TODO: ver como no repetir esto para cada error
+                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                            perror("error al eliminar un fd del epoll");
+                        }
+                        connection->is_active = false;
+                        close(connection->file_descriptor);
                         break;
                     } else if (bytes_read == -1) {
                         perror("error al leer del cliente\n");
@@ -658,18 +679,33 @@ int main(int argc, char *argv[]) {
                     Parse_Error err = parse_request_line(allocator, &lexer, request);
                     if (err) {
                         handle_parse_error(allocator, connection->file_descriptor, err);
+                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                            perror("error al eliminar un fd del epoll");
+                        }
+                        connection->is_active = false;
+                        close(connection->file_descriptor);
                         break;
                     }
 
                     err = parse_headers(allocator, &lexer, request);
                     if (err) {
                         handle_parse_error(allocator, connection->file_descriptor, err);
+                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                            perror("error al eliminar un fd del epoll");
+                        }
+                        connection->is_active = false;
+                        close(connection->file_descriptor);
                         break;
                     }
 
                     err = parse_body(allocator, &lexer, request);
                     if (err) {
                         handle_parse_error(allocator, connection->file_descriptor, err);
+                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                            perror("error al eliminar un fd del epoll");
+                        }
+                        connection->is_active = false;
+                        close(connection->file_descriptor);
                         break;
                     }
 
