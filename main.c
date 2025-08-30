@@ -1,25 +1,6 @@
-#include "gg_stdlib.h"
-
 #include "main.h"
 
-#define HTTP_VERSION_10 string_lit("HTTP/1.0")
-#define HTTP_VERSION_11 string_lit("HTTP/1.1")
-
-#define MAX_CONNECTIONS 1024
-#define MAX_EPOLL_EVENTS 32
-
-typedef struct Header {
-    String field_name;
-    String field_value;
-    bool occupied;
-} Header;
-
-#define MAX_HEADERS_CAPACITY 32
-typedef struct Headers_Map {
-    Header headers[MAX_HEADERS_CAPACITY];
-    u32 length;
-    u32 capacity;
-} Headers_Map;
+static volatile bool main_running = true;
 
 static void headers_map_init(Headers_Map *headers_map) {
     headers_map->length = 0;
@@ -97,52 +78,6 @@ static String *headers_get(Headers_Map *headers_map, String field_name) {
     return NULL;
 }
 
-typedef enum Method {
-    METHOD_GET,
-    METHOD_PUT,
-    METHOD_POST,
-    METHOD_DELETE
-} Method;
-
-typedef struct Body {
-    u8 *data;
-    u32 length;
-} Body;
-
-typedef struct Request {
-    Method method;
-    String uri;
-    String version;
-    Headers_Map headers_map;
-    Body body;
-} Request;
-
-typedef struct Response {
-    u16 status;
-    Headers_Map headers;
-    Body body;
-} Response;
-
-
-typedef struct Connection {
-    Allocator *allocator;
-
-    i32 file_descriptor;
-    String host;
-    u16 port;
-
-    bool is_active;
-
-    Request request;
-} Connection;
-
-typedef struct Server {
-    i32 file_descriptor;
-
-    u32 connections_count;
-    Connection *connections;
-} Server;
-
 static String http_status_reason(u16 status) {
     switch (status) {
         case 200: return string_lit("Ok");
@@ -211,18 +146,6 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
     response->body.length = length;
 }
 
-typedef struct Lexer {
-    i32 fd;
-
-    u8 *buf;
-    u32 capacity;
-    u32 size;
-
-    u32 buf_position;
-    u32 read_position;
-    char current_char;
-} Lexer;
-
 static void init_lexer(Lexer *lexer, u8 *buf, u32 capacity) {
     lexer->buf = buf;
     lexer->capacity = capacity; // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
@@ -252,39 +175,6 @@ static void read_char(Lexer *lexer) {
     lexer->buf_position = lexer->read_position;
     lexer->read_position++;
 }
-
-typedef enum Parse_Error {
-    PARSE_ERROR_NO_ERROR,
-
-    // request line errors
-    PARSE_ERROR_MALFORMED_REQUEST_LINE,
-    PARSE_ERROR_INVALID_METHOD,
-    PARSE_ERROR_INVALID_URI,
-    PARSE_ERROR_INVALID_VERSION,
-
-    // headers errors
-    PARSE_ERROR_MALFORMED_HEADER,
-
-    // body errors
-    PARSE_ERROR_BODY_TOO_LARGE,
-
-    PARSE_ERROR_COUNT
-} Parse_Error;
-
-static const char *parse_error_messages[PARSE_ERROR_COUNT + 1] = {
-    "",
-
-    "parse error malformed request line",
-    "parse error invalid method",
-    "parse error invalid uri",
-    "parse error invalid version",
-
-    "parse error malformed header",
-
-    "parse error body too large",
-
-    "count"
-};
 
 static Parse_Error parse_request_line(Allocator *allocator, Lexer *lexer, Request *request) {
     do {
@@ -444,9 +334,10 @@ static Parse_Error parse_body(Allocator *allocator, Lexer *lexer, Request *reque
 static void connection_write(Allocator *allocator, i32 fd, Response response) {
     String encoded_response = encode_response(allocator, response);
 
-    u32 bytes_written = write(fd, encoded_response.data, encoded_response.size);
+    u32 bytes_written = send(fd, encoded_response.data, encoded_response.size, 0);
     if (bytes_written != encoded_response.size) {
         perror("error al escribir al cliente");
+        // Retornar un error o algo
     }
 }
 
@@ -535,9 +426,36 @@ static Connection *server_find_free_connection(Server *server) {
     return NULL;
 }
 
+static void signal_handler(i32 signal_number) {
+    switch (signal_number) {
+        case SIGINT:
+            main_running = false;
+            break;
+        default: break;
+    }
+}
+
+static i32 init_signals(void) {
+    if (signal(SIGINT, &signal_handler) == SIG_ERR) {
+        return -1;
+    }
+
+    if (signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
+        return -1;
+    }
+
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        return -1;
+    }
+    
+    return 0;
+}
 
 int main(int argc, char *argv[]) {
-    printf("Iniciando servidor..\n");
+    if (init_signals() == -1) {
+        perror("error al iniciar las signals");
+        exit(EXIT_FAILURE);
+    }
 
     Allocator *allocator = allocator_make(1 * GB);
 
@@ -557,7 +475,7 @@ int main(int argc, char *argv[]) {
     init_server(allocator, &server, server_fd, MAX_CONNECTIONS);
     
     // address reutilizable, no hace falta esperar al TIME_WAIT
-    u32 reuse = 1;
+    i32 reuse = 1;
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse)) == -1) {
         perror("error al realizar setsockopt(SO_REUSEADDR)");
         exit(EXIT_FAILURE);
@@ -598,7 +516,7 @@ int main(int argc, char *argv[]) {
     
     // aceptar conexiones
     i32 file_descriptors_count = 0;
-    while (true) {
+    while (main_running) {
         file_descriptors_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
         if (file_descriptors_count == -1) {
             perror("epoll_wait()");
@@ -656,7 +574,7 @@ int main(int argc, char *argv[]) {
                 while (true) {
                     // TODO: Tengo que leer todo lo que hay, sino se puede bugguear
                     // De hecho se esta buggueando y creo que es esto
-                    i32 bytes_read = read(connection->file_descriptor, lexer.buf, lexer.capacity);
+                    i32 bytes_read = recv(connection->file_descriptor, lexer.buf, lexer.capacity, 0);
                     if (bytes_read == 0) {
                         printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
 
@@ -732,6 +650,7 @@ int main(int argc, char *argv[]) {
         }
     }
       
+    close(epoll_fd);
     close(server_fd);
     
     return EXIT_SUCCESS;

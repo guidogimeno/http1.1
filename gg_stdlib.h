@@ -28,23 +28,25 @@ typedef double f64;
 // ### Allocators ####################
 // ###################################
 
+#define MAX_SCRATCH_COUNT 2
+
 #define DEFAULT_ALIGNMENT (2*sizeof(void *))
 
-typedef struct Allocator {
+typedef struct Allocator Allocator;
+typedef struct AllocatorTemp AllocatorTemp;
+
+struct Allocator {
     u8  *data;
     u64 size;
     u64 capacity;
-} Allocator;
+};
 
-typedef struct AllocatorTemp {
+struct AllocatorTemp {
     Allocator *allocator;
     u32       position;
-} AllocatorTemp;
-
-#define MAX_SCRATCH_COUNT 2
+};
 
 __thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
-
 
 Allocator *allocator_make(u64 capacity);
 void      *allocator_alloc(Allocator *allocator, u64 size);
@@ -158,22 +160,22 @@ AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count) {
 // ### Strings #######################
 // ###################################
 
-typedef struct String {
+#define STRING_BUILDER_DEFAULT_CAPACITY 32
+
+typedef struct String String;
+typedef struct String_Builder String_Builder;
+
+struct String {
     const char *data;
     u32 size;
-} String;
+};
 
-typedef struct String_Builder {
+struct String_Builder {
     u8 *data;
     u32 length;
     u32 capacity;
     Allocator *allocator;
-} String_Builder;
-
-#define STRING_BUILDER_DEFAULT_CAPACITY 32
-
-
-// String functions
+};
 
 #define string_lit(char_pointer) string_with_len(char_pointer, sizeof(char_pointer) - 1)
 
@@ -562,11 +564,13 @@ String sbuilder_to_string(String_Builder *sb) {
 // ### Dynamic Arrays ################
 // ###################################
 
-typedef struct DynamicArray {
+typedef struct DynamicArray DynamicArray;
+
+struct DynamicArray {
     void *items;
     u64 length;
     u64 capacity;
-} DynamicArray;
+};
 
 void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t item_size) {
     DynamicArray *dynamic_array = (DynamicArray *)dynamic_array_ptr;
