@@ -359,15 +359,15 @@ static void http_handler(Allocator *allocator, Request *req, Response *res) {
     response_write(allocator, res, (u8 *)body.data, body.size);
 }
 
-static i32 epoll_events_add_file_descriptor(i32 epoll_fd, i32 fd, u32 events) {
+static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events) {
     struct epoll_event event;
-    event.events = events;
+    event.events = epoll_events;
     event.data.fd = fd;
-    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event);
+    return epoll_ctl(epoll_file_descriptor, EPOLL_CTL_ADD, fd, &event);
 }
 
-static i32 epoll_events_remove_file_descriptor(i32 epoll_fd, i32 fd) {
-    return epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 fd) {
+    return epoll_ctl(epoll_file_descriptor, EPOLL_CTL_DEL, fd, NULL);
 }
 
 static i32 set_nonblocking(i32 fd) {
@@ -524,28 +524,28 @@ int main(int argc, char *argv[], char *env[]) {
 
     // epoll
     i32 epoll_events_count = 0;
-    struct epoll_event events[MAX_EPOLL_EVENTS];
+    struct epoll_event epoll_events[MAX_EPOLL_EVENTS];
 
-    i32 epoll_fd = epoll_create1(0);
-    if (epoll_fd == -1) {
+    i32 epoll_file_descriptor = epoll_create1(0);
+    if (epoll_file_descriptor == -1) {
         exit(EXIT_FAILURE);
     }
 
-    if (epoll_events_add_file_descriptor(epoll_fd, server_fd, EPOLLIN) == -1) {
+    if (epoll_events_add_file_descriptor(epoll_file_descriptor, server_fd, EPOLLIN) == -1) {
         perror("error al agregar server_fd al epoll events");
         exit(EXIT_FAILURE);
     }
     
     // aceptar conexiones
     while (main_running) {
-        epoll_events_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
+        epoll_events_count = epoll_wait(epoll_file_descriptor, epoll_events, MAX_EPOLL_EVENTS, -1);
         if (epoll_events_count == -1) {
             perror("epoll_wait()");
             continue;
         }
 
         for (u32 i = 0; i < epoll_events_count; i++) {
-            if (events[i].data.fd == server_fd) {
+            if (epoll_events[i].data.fd == server_fd) {
                 i32 client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
                 if (client_fd == -1) {
                     perror("error al aceptar cliente");
@@ -558,7 +558,7 @@ int main(int argc, char *argv[], char *env[]) {
                     continue;
                 }
 
-                if (epoll_events_add_file_descriptor(epoll_fd, client_fd, EPOLLIN) == -1) {
+                if (epoll_events_add_file_descriptor(epoll_file_descriptor, client_fd, EPOLLIN) == -1) {
                     perror("error al agregar client_fd al epoll events");
                     close(client_fd);
                     continue;
@@ -576,15 +576,15 @@ int main(int argc, char *argv[], char *env[]) {
 
                 printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
             } else {
-                Connection *connection = server_find_connection(&server, events[i].data.fd);
+                Connection *connection = server_find_connection(&server, epoll_events[i].data.fd);
                 if (connection == NULL) {
                     perror("no se logro encontrar la conexion en el pool de conexiones");
 
-                    if (epoll_events_remove_file_descriptor(epoll_fd, events[i].data.fd) == -1) {
+                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, epoll_events[i].data.fd) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
 
-                    close(events[i].data.fd);
+                    close(epoll_events[i].data.fd);
                     continue;
                 }
 
@@ -597,7 +597,7 @@ int main(int argc, char *argv[], char *env[]) {
                     printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
 
                     // TODO: ver como no repetir esto para cada error
-                    if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
                     connection->is_active = false;
@@ -612,7 +612,7 @@ int main(int argc, char *argv[], char *env[]) {
                 Parse_Error err = parse_request_line(connection->allocator, &lexer, &connection->request);
                 if (err) {
                     handle_parse_error(connection->allocator, connection->file_descriptor, err);
-                    if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
                     connection->is_active = false;
@@ -623,7 +623,7 @@ int main(int argc, char *argv[], char *env[]) {
                 err = parse_headers(connection->allocator, &lexer, &connection->request);
                 if (err) {
                     handle_parse_error(connection->allocator, connection->file_descriptor, err);
-                    if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
                     connection->is_active = false;
@@ -634,7 +634,7 @@ int main(int argc, char *argv[], char *env[]) {
                 err = parse_body(connection->allocator, &lexer, &connection->request);
                 if (err) {
                     handle_parse_error(connection->allocator, connection->file_descriptor, err);
-                    if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
                     connection->is_active = false;
@@ -651,7 +651,7 @@ int main(int argc, char *argv[], char *env[]) {
 
                 connection->is_active = false;
 
-                if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
                     perror("error al eliminar un fd del epoll");
                 }
 
@@ -662,7 +662,7 @@ int main(int argc, char *argv[], char *env[]) {
         }
     }
       
-    close(epoll_fd);
+    close(epoll_file_descriptor);
     close(server_fd);
     
     return EXIT_SUCCESS;
