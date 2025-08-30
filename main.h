@@ -12,7 +12,7 @@
 #define HTTP_VERSION_11 string_lit("HTTP/1.1")
 
 #define MAX_CONNECTIONS 1024
-#define MAX_EPOLL_EVENTS 32
+#define MAX_EPOLL_EVENTS 256
 #define MAX_HEADERS_CAPACITY 32
 
 typedef struct Server Server;
@@ -23,9 +23,17 @@ typedef struct Header Header;
 typedef struct Headers_Map Headers_Map;
 typedef struct Body Body;
 typedef struct Lexer Lexer;
+typedef struct Parser Parser;
 
 typedef enum Method Method;
 typedef enum Parse_Error Parse_Error;
+
+struct Parser {
+    Allocator *allocator;
+
+    u8 *buffer;
+    u32 size;
+};
 
 struct Header {
     String field_name;
@@ -75,6 +83,8 @@ struct Connection {
     bool is_active;
 
     Request request;
+
+    Parser parser;
 };
 
 struct Server {

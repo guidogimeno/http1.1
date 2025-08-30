@@ -146,8 +146,8 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
     response->body.length = length;
 }
 
-static void init_lexer(Lexer *lexer, u8 *buf, u32 capacity) {
-    lexer->buf = buf;
+static void init_lexer(Lexer *lexer, u8 *buffer, u32 capacity) {
+    lexer->buf = buffer;
     lexer->capacity = capacity; // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
     lexer->size = 0; 
     lexer->buf_position = 0;
@@ -337,7 +337,7 @@ static void connection_write(Allocator *allocator, i32 fd, Response response) {
     u32 bytes_written = send(fd, encoded_response.data, encoded_response.size, 0);
     if (bytes_written != encoded_response.size) {
         perror("error al escribir al cliente");
-        // Retornar un error o algo
+        // TODO: Retornar un error o algo
     }
 }
 
@@ -352,7 +352,7 @@ static void handle_parse_error(Allocator *allocator, i32 fd, Parse_Error err) {
     connection_write(allocator, fd, response);
 }
 
-static void http_handler(Allocator *allocator, Request req, Response *res) {
+static void http_handler(Allocator *allocator, Request *req, Response *res) {
     String body = string("{ \"foo\": \"bar\" }");
 
     res->status = 200;
@@ -384,26 +384,27 @@ static i32 set_nonblocking(i32 fd) {
 }
 
 
-static void init_server(Allocator *allocator, Server *server, i32 file_descriptor, u32 max_connections) {
+static void server_init(Server *server, i32 file_descriptor, Connection *connections, u32 max_connections) {
     server->file_descriptor = file_descriptor;
     server->connections_count = max_connections;
-    server->connections = allocator_alloc(allocator, sizeof(Connection) * max_connections);
+    server->connections = connections;
 }
 
-
-// Connections
-static void init_connection(Connection *connection, i32 file_descriptor, struct sockaddr_in address) {
-    connection->file_descriptor = file_descriptor;
-    connection->host = string(inet_ntoa(address.sin_addr));
-    connection->port = ntohs(address.sin_port); 
-    connection->is_active = false;
-    memset(&connection->request, 0, sizeof(Connection));
-
+static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address) {
     if (connection->allocator == NULL) {
         connection->allocator = allocator_make(1 * MB) ;
     } else {
         allocator_reset(connection->allocator);
     }
+
+    connection->file_descriptor = file_descriptor;
+    connection->host = string(inet_ntoa(address.sin_addr));
+    connection->port = ntohs(address.sin_port); 
+    connection->is_active = false;
+    connection->request = (Request){0};
+    headers_map_init(&connection->request.headers_map);
+    connection->parser = (Parser){0};
+    connection->parser.allocator = connection->allocator;
 }
 
 static Connection *server_find_connection(Server *server, i32 file_descriptor) {
@@ -477,13 +478,6 @@ int main(int argc, char *argv[], char *env[]) {
         exit(EXIT_FAILURE);
     }
 
-    Allocator *allocator = allocator_make(1 * GB);
-
-    struct epoll_event events[MAX_EPOLL_EVENTS];
-
-    struct sockaddr_in client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
-
     // creacion del socket
     i32 server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
@@ -491,8 +485,10 @@ int main(int argc, char *argv[], char *env[]) {
         exit(EXIT_FAILURE);
     }
 
+    Connection connections[MAX_CONNECTIONS] = {0};
+
     Server server;
-    init_server(allocator, &server, server_fd, MAX_CONNECTIONS);
+    server_init(&server, server_fd, connections, MAX_CONNECTIONS);
     
     // address reutilizable, no hace falta esperar al TIME_WAIT
     i32 reuse = 1;
@@ -523,7 +519,13 @@ int main(int argc, char *argv[], char *env[]) {
     u16 server_port = ntohs(server_addr.sin_port);
     printf("Servidor escuchando en: %.*s:%d\n", string_print(server_host), server_port);
 
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+
     // epoll
+    i32 epoll_events_count = 0;
+    struct epoll_event events[MAX_EPOLL_EVENTS];
+
     i32 epoll_fd = epoll_create1(0);
     if (epoll_fd == -1) {
         exit(EXIT_FAILURE);
@@ -535,15 +537,14 @@ int main(int argc, char *argv[], char *env[]) {
     }
     
     // aceptar conexiones
-    i32 file_descriptors_count = 0;
     while (main_running) {
-        file_descriptors_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
-        if (file_descriptors_count == -1) {
+        epoll_events_count = epoll_wait(epoll_fd, events, MAX_EPOLL_EVENTS, -1);
+        if (epoll_events_count == -1) {
             perror("epoll_wait()");
             continue;
         }
 
-        for (u32 i = 0; i < file_descriptors_count; i++) {
+        for (u32 i = 0; i < epoll_events_count; i++) {
             if (events[i].data.fd == server_fd) {
                 i32 client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
                 if (client_fd == -1) {
@@ -570,7 +571,7 @@ int main(int argc, char *argv[], char *env[]) {
                     continue;
                 }
 
-                init_connection(connection, client_fd, client_addr);
+                connection_init(connection, client_fd, client_addr);
                 connection->is_active = true;
 
                 printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
@@ -591,81 +592,72 @@ int main(int argc, char *argv[], char *env[]) {
                 Lexer lexer = {0};
                 init_lexer(&lexer, buf, 8 * KB);
 
-                while (true) {
-                    // TODO: Tengo que leer todo lo que hay, sino se puede bugguear
-                    // De hecho se esta buggueando y creo que es esto
-                    i32 bytes_read = recv(connection->file_descriptor, lexer.buf, lexer.capacity, 0);
-                    if (bytes_read == 0) {
-                        printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
+                i32 bytes_read = recv(connection->file_descriptor, lexer.buf, lexer.capacity, 0);
+                if (bytes_read == 0) {
+                    printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
 
-                        // TODO: ver como no repetir esto para cada error
-                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
-                            perror("error al eliminar un fd del epoll");
-                        }
-                        connection->is_active = false;
-                        close(connection->file_descriptor);
-                        break;
-                    } else if (bytes_read == -1) {
-                        perror("error al leer del cliente\n");
-                        break;
-                    }
-                    lexer.size = bytes_read - 1;
-
-                    Request *request = &connection->request;
-                    headers_map_init(&request->headers_map);
-
-                    Parse_Error err = parse_request_line(allocator, &lexer, request);
-                    if (err) {
-                        handle_parse_error(allocator, connection->file_descriptor, err);
-                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
-                            perror("error al eliminar un fd del epoll");
-                        }
-                        connection->is_active = false;
-                        close(connection->file_descriptor);
-                        break;
-                    }
-
-                    err = parse_headers(allocator, &lexer, request);
-                    if (err) {
-                        handle_parse_error(allocator, connection->file_descriptor, err);
-                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
-                            perror("error al eliminar un fd del epoll");
-                        }
-                        connection->is_active = false;
-                        close(connection->file_descriptor);
-                        break;
-                    }
-
-                    err = parse_body(allocator, &lexer, request);
-                    if (err) {
-                        handle_parse_error(allocator, connection->file_descriptor, err);
-                        if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
-                            perror("error al eliminar un fd del epoll");
-                        }
-                        connection->is_active = false;
-                        close(connection->file_descriptor);
-                        break;
-                    }
-
-                    Response response = {0};
-                    headers_map_init(&response.headers);
-
-                    http_handler(allocator, *request, &response);
-
-                    connection_write(allocator, connection->file_descriptor, response);
-
-                    connection->is_active = false;
-
+                    // TODO: ver como no repetir esto para cada error
                     if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
-
-                    printf("Conexion cerrada\n");
-
+                    connection->is_active = false;
                     close(connection->file_descriptor);
-
-                    break;
+                    continue;
+                } else if (bytes_read == -1) {
+                    perror("error al leer del cliente\n");
+                    continue;
                 }
+                lexer.size = bytes_read - 1;
+
+                Parse_Error err = parse_request_line(connection->allocator, &lexer, &connection->request);
+                if (err) {
+                    handle_parse_error(connection->allocator, connection->file_descriptor, err);
+                    if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                        perror("error al eliminar un fd del epoll");
+                    }
+                    connection->is_active = false;
+                    close(connection->file_descriptor);
+                    continue;
+                }
+
+                err = parse_headers(connection->allocator, &lexer, &connection->request);
+                if (err) {
+                    handle_parse_error(connection->allocator, connection->file_descriptor, err);
+                    if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                        perror("error al eliminar un fd del epoll");
+                    }
+                    connection->is_active = false;
+                    close(connection->file_descriptor);
+                    continue;
+                }
+
+                err = parse_body(connection->allocator, &lexer, &connection->request);
+                if (err) {
+                    handle_parse_error(connection->allocator, connection->file_descriptor, err);
+                    if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                        perror("error al eliminar un fd del epoll");
+                    }
+                    connection->is_active = false;
+                    close(connection->file_descriptor);
+                    continue;
+                }
+
+                Response response = {0};
+                headers_map_init(&response.headers);
+
+                http_handler(connection->allocator, &connection->request, &response);
+
+                connection_write(connection->allocator, connection->file_descriptor, response);
+
+                connection->is_active = false;
+
+                if (epoll_events_remove_file_descriptor(epoll_fd, connection->file_descriptor) == -1) {
+                    perror("error al eliminar un fd del epoll");
+                }
+
+                printf("Conexion cerrada\n");
+
+                close(connection->file_descriptor);
             }
         }
     }
