@@ -451,7 +451,27 @@ static i32 init_signals(void) {
     return 0;
 }
 
-int main(int argc, char *argv[]) {
+static void set_process_name(int argc, char *argv[], char *env[], char *name) {
+    size_t available = 0, length = strlen(name) + 1;
+
+    if (argc >= 1) {
+        available += strlen(argv[0]);
+    }
+
+    for (i32 n = 0; env[n] != NULL; n ++) {
+        available += strlen(env[0]);
+    }
+
+    if (length > available) {
+        return;
+    }
+
+    memcpy(argv[0], name, length);
+}
+
+int main(int argc, char *argv[], char *env[]) {
+    set_process_name(argc, argv, env, "HTTP_SERVER_GG");
+
     if (init_signals() == -1) {
         perror("error al iniciar las signals");
         exit(EXIT_FAILURE);
