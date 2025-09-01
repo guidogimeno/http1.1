@@ -1,0 +1,2 @@
+Header:primero\nBody:falopa de la buena\n\n
+Header:segundo\nBody:mas falopa de la buena\n\n

@@ -22,14 +22,17 @@ case "$1" in
         clang -O2 -std=c11 -Wall -Werror main.c -o main
         ;;
     "debug")
-        clang -g -std=c11 -Wall -Werror main.c -o main
-        gdb -ex "tui enable" -ex "layout src" -ex "break main" ./main
+        if [ -f "exp" ]; then
+            rm -f "exp"
+        fi
+        clang -g -std=c11 -Wall -Werror experimentos/recv.c -o exp
+        gdb ./exp
         ;;
     "exp")
         if [ -f "exp" ]; then
             rm -f "exp"
         fi
-        clang -O2 -std=c11 -Wall -Werror experimentos/main.c -o exp
+        clang -O2 -std=c11 -Wall -Werror experimentos/recv.c -o exp
         ./exp
         rm -f "exp"
         ;;
