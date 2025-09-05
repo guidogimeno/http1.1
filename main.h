@@ -13,7 +13,7 @@
 
 #define MAX_CONNECTIONS 1024
 #define MAX_EPOLL_EVENTS 256
-#define MAX_PARSER_BUFFER_CAPACITY 10 * KB
+#define MAX_PARSER_BUFFER_CAPACITY 4
 #define MAX_HEADERS_CAPACITY 32
 
 typedef struct Server Server;

@@ -22,11 +22,11 @@ case "$1" in
         clang -O2 -std=c11 -Wall -Werror main.c -o main
         ;;
     "debug")
-        if [ -f "exp" ]; then
-            rm -f "exp"
+        if [ -f "main" ]; then
+            rm -f "main"
         fi
-        clang -g -std=c11 -Wall -Werror experimentos/recv.c -o exp
-        gdb ./exp
+        clang -g -std=c11 -Wall -Werror main.c -o main
+        gdb ./main
         ;;
     "exp")
         if [ -f "exp" ]; then

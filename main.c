@@ -229,7 +229,7 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
     u8 *first_buffer_offset = first_buffer->data + parser->marked_at;
 
     if (first_buffer == last_buffer) {
-        u32 total_size = last_buffer_offset - parser->marked_at;
+        u32 total_size = last_buffer_offset - parser->marked_at + 1;
 
         void *data = allocator_alloc(parser->allocator, total_size);
 
@@ -243,10 +243,20 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
         return result;
     }
 
+    // 10
+    // 1 - 3 (0 - 9) -> 4ta -> 7
+    // 2 - entero -> 10
+    // 3 - 7 (0 - 9) -> 8ta -> 10 - 7 - 1 = 2
+    // total 17 - 6 = 11
+    // 
+    // 1: 10 - 3 = 7 <= ok
+    // 2: 10
+    // 3: 10 - 5 = 5 <- mal + 1
+    // total 17 - 6 = 11
     u32 buffer_max_size = first_buffer->size;
     u32 first_buffer_remaining_size = buffer_max_size - parser->marked_at;
     u32 middle_buffers_size = parser->marked_distance * buffer_max_size;
-    u32 surplus_buffer_size = buffer_max_size - last_buffer_offset;
+    u32 surplus_buffer_size = buffer_max_size - last_buffer_offset - 1;
 
     u32 total_size = first_buffer_remaining_size + middle_buffers_size - surplus_buffer_size;
 
@@ -263,7 +273,7 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
         next_memcpy += buffer_max_size;
     }
 
-    memcpy(next_memcpy, buffer->data, last_buffer_offset);
+    memcpy(next_memcpy, buffer->data, last_buffer_offset + 1);
 
     String result = {
         .data = data,
@@ -376,7 +386,7 @@ static void parser_parse(Parser *parser, Request *request) {
         }
 
         // si ya no quedan field names
-        if (parser->marked_at == parser->at) {
+        if (parser->marked_at == parser->at) { // FIX: mirar si es el mismo buffer tambien, no es solo el "at"
             if (parser_get_char(parser) != '\r') {
                 parser->state = PARSER_STATE_FAILED;
                 return;
@@ -609,9 +619,9 @@ int main(int argc, char *argv[], char *env[]) {
         exit(EXIT_FAILURE);
     }
 
-    Connection connections[MAX_CONNECTIONS] = {0};
+    Connection connections[MAX_CONNECTIONS];
 
-    Server server;
+    Server server = {0};
     server_init(&server, server_fd, connections, MAX_CONNECTIONS);
     
     // address reutilizable, no hace falta esperar al TIME_WAIT
@@ -721,9 +731,11 @@ int main(int argc, char *argv[], char *env[]) {
                         perror("error al eliminar un fd del epoll");
                     }
 
-                    printf("Conexion cerrada\n");
+                    printf("Conexion cerrada por errores a la hora de parsear\n");
 
                     close(connection->file_descriptor);
+
+                    continue;
                 }
 
                 // TODO: En algun lado me falta ver el tema del keep alive
@@ -741,7 +753,7 @@ int main(int argc, char *argv[], char *env[]) {
                     perror("error al eliminar un fd del epoll");
                 }
 
-                printf("Conexion cerrada\n");
+                printf("Conexion cerrada porque ya se envio la respuesta\n");
 
                 close(connection->file_descriptor);
             }
