@@ -156,7 +156,6 @@ static void parser_parse(TestParser *parser) {
     parser->state = TEST_PARSER_STATE_PARSING;
 
     parser_read_char(parser);
-
     parser_mark(parser, parser->at);
 
     while (is_letter(parser->current_buffer->data[parser->at]) && parser_keep_going(parser)) {
@@ -168,7 +167,7 @@ static void parser_parse(TestParser *parser) {
         return;
     }
 
-    String header = parser_extract_block(parser, parser->at);
+    Strin header = parser_extract_block(parser, parser->at);
 
     printf("HEADER: %.*s\n", string_print(header));
 

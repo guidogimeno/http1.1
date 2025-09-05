@@ -13,6 +13,7 @@
 
 #define MAX_CONNECTIONS 1024
 #define MAX_EPOLL_EVENTS 256
+#define MAX_PARSER_BUFFER_CAPACITY 10 * KB
 #define MAX_HEADERS_CAPACITY 32
 
 typedef struct Server Server;
@@ -22,17 +23,47 @@ typedef struct Response Response;
 typedef struct Header Header;
 typedef struct Headers_Map Headers_Map;
 typedef struct Body Body;
-typedef struct Lexer Lexer;
+typedef struct Parser_Buffer Parser_Buffer;
 typedef struct Parser Parser;
 
 typedef enum Method Method;
 typedef enum Parse_Error Parse_Error;
+typedef enum Parser_State Parser_State;
+
+enum Parser_State {
+    PARSER_STATE_STARTED,
+
+    PARSER_STATE_PARSING_REQUEST_LINE,
+    PARSER_STATE_PARSING_HEADERS,
+    PARSER_STATE_PARSING_BODY,
+
+    PARSER_STATE_FINISHED,
+
+    PARSER_STATE_FAILED
+};
+
+struct Parser_Buffer {
+    Parser_Buffer *next;
+    u8 *data;
+    u32 size;
+};
 
 struct Parser {
     Allocator *allocator;
 
-    u8 *buffer;
-    u32 size;
+    i32 file_descriptor;
+
+    u32 bytes_read;
+    Parser_Buffer *first_buffer;
+    Parser_Buffer *last_buffer;
+    Parser_Buffer *current_buffer;
+    u32 at;
+
+    Parser_Buffer *marked_buffer;
+    u32 marked_at;
+    u32 marked_distance;
+
+    Parser_State state;
 };
 
 struct Header {
@@ -94,47 +125,3 @@ struct Server {
     Connection *connections;
 };
 
-struct Lexer {
-    i32 fd;
-
-    u8 *buf;
-    u32 capacity;
-    u32 size;
-
-    u32 buf_position;
-    u32 read_position;
-    char current_char;
-};
-
-enum Parse_Error {
-    PARSE_ERROR_NO_ERROR,
-
-    // request line errors
-    PARSE_ERROR_MALFORMED_REQUEST_LINE,
-    PARSE_ERROR_INVALID_METHOD,
-    PARSE_ERROR_INVALID_URI,
-    PARSE_ERROR_INVALID_VERSION,
-
-    // headers errors
-    PARSE_ERROR_MALFORMED_HEADER,
-
-    // body errors
-    PARSE_ERROR_BODY_TOO_LARGE,
-
-    PARSE_ERROR_COUNT
-};
-
-static const char *parse_error_messages[PARSE_ERROR_COUNT + 1] = {
-    "",
-
-    "parse error malformed request line",
-    "parse error invalid method",
-    "parse error invalid uri",
-    "parse error invalid version",
-
-    "parse error malformed header",
-
-    "parse error body too large",
-
-    "count"
-};

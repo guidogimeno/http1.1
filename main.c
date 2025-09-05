@@ -146,15 +146,6 @@ static void response_write(Allocator *allocator, Response *response, u8 *content
     response->body.length = length;
 }
 
-static void init_lexer(Lexer *lexer, u8 *buffer, u32 capacity) {
-    lexer->buf = buffer;
-    lexer->capacity = capacity; // Note: It is RECOMMENDED that all HTTP senders and recipients support, at a minimum, request-line lengths of 8000 octets.
-    lexer->size = 0; 
-    lexer->buf_position = 0;
-    lexer->read_position = 0;
-    lexer->current_char = 0;
-}
-
 static bool is_letter(char ch) {
     return (ch >= 'a' && ch <= 'z') ||
         (ch >= 'A' && ch <= 'Z');
@@ -166,169 +157,312 @@ static bool is_alphanum(char ch) {
            (ch >= 'a' && ch <= 'z');
 }
 
-static void read_char(Lexer *lexer) {
-    if (lexer->read_position > lexer->size) {
-        lexer->current_char = 0;
-    } else {
-        lexer->current_char = lexer->buf[lexer->read_position];
-    }
-    lexer->buf_position = lexer->read_position;
-    lexer->read_position++;
+
+// Parser
+
+static void parser_init(Parser *parser, Allocator * allocator, i32 file_descriptor) {
+    *parser = (Parser){0};
+    parser->file_descriptor = file_descriptor;
+    parser->allocator = allocator;
+    parser->bytes_read = 0;
+    parser->first_buffer = NULL;
+    parser->last_buffer = NULL;
+    parser->current_buffer = NULL;
+    parser->at = 0;
+    parser->marked_buffer = NULL;
+    parser->marked_at = 0;
+    parser->marked_distance = 0;
+    parser->state = PARSER_STATE_STARTED;
 }
 
-static Parse_Error parse_request_line(Allocator *allocator, Lexer *lexer, Request *request) {
-    do {
-        read_char(lexer);
-    } while (is_letter(lexer->current_char));
+static char parser_get_char(Parser *parser) {
+    return parser->current_buffer->data[parser->at];
+}
+
+static bool parser_keep_going(Parser *parser) {
+    return parser->state != PARSER_STATE_FAILED;
+}
+
+static void parser_read_char(Parser *parser) {
+    if (parser->at + 1 < parser->bytes_read) {
+        parser->at++;
+        return;
+    } 
+
+    void *memory = allocator_alloc(parser->allocator, sizeof(Parser_Buffer) + MAX_PARSER_BUFFER_CAPACITY);
+    Parser_Buffer *new_buffer = (Parser_Buffer *)memory;
+    new_buffer->size = MAX_PARSER_BUFFER_CAPACITY;
+    new_buffer->data = memory + sizeof(Parser_Buffer);
+    new_buffer->next = NULL;
+
+    u32 bytes_read = recv(parser->file_descriptor, new_buffer->data, new_buffer->size, 0);
+
+    if (bytes_read == 0 || bytes_read == -1) {
+        parser->state = PARSER_STATE_FAILED;
+        return;
+    }
+
+    parser->at = 0;
+    parser->current_buffer = new_buffer;
+    parser->bytes_read = bytes_read;
+    parser->marked_distance++;
+
+    if (parser->first_buffer == NULL && parser->last_buffer == NULL) {
+        parser->first_buffer = new_buffer;
+        parser->last_buffer = new_buffer;
+    }
+
+    parser->last_buffer->next = new_buffer;
+    parser->last_buffer = new_buffer;
+}
+
+static void parser_mark(Parser *parser, u32 at) {
+    parser->marked_buffer = parser->current_buffer;
+    parser->marked_distance = 0;
+    parser->marked_at = at;
+}
+
+static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
+    Parser_Buffer *first_buffer = parser->marked_buffer;
+    Parser_Buffer *last_buffer = parser->current_buffer;
+
+    u8 *first_buffer_offset = first_buffer->data + parser->marked_at;
+
+    if (first_buffer == last_buffer) {
+        u32 total_size = last_buffer_offset - parser->marked_at;
+
+        void *data = allocator_alloc(parser->allocator, total_size);
+
+        memcpy(data, first_buffer_offset, total_size);
+
+        String result = {
+            .data = data, 
+            .size = total_size
+        };
+
+        return result;
+    }
+
+    u32 buffer_max_size = first_buffer->size;
+    u32 first_buffer_remaining_size = buffer_max_size - parser->marked_at;
+    u32 middle_buffers_size = parser->marked_distance * buffer_max_size;
+    u32 surplus_buffer_size = buffer_max_size - last_buffer_offset;
+
+    u32 total_size = first_buffer_remaining_size + middle_buffers_size - surplus_buffer_size;
+
+    void *data = allocator_alloc(parser->allocator, total_size);
+    void *next_memcpy = data;
+
+    memcpy(next_memcpy, first_buffer_offset, first_buffer_remaining_size);
+    next_memcpy += first_buffer_remaining_size;
+
+    Parser_Buffer *buffer;
+
+    for (buffer = first_buffer->next; buffer != last_buffer; buffer = buffer->next) {
+        memcpy(next_memcpy, buffer->data, buffer_max_size);
+        next_memcpy += buffer_max_size;
+    }
+
+    memcpy(next_memcpy, buffer->data, last_buffer_offset);
+
+    String result = {
+        .data = data,
+        .size = total_size
+    };
+
+    return result;
+}
+
+static void parser_parse(Parser *parser, Request *request) {
+    parser->state = PARSER_STATE_PARSING_REQUEST_LINE;
+
+    parser_read_char(parser);
+    parser_mark(parser, parser->at);
+
+    // Parse Request Line
+    while (is_letter(parser_get_char(parser)) && parser_keep_going(parser)) {
+        parser_read_char(parser);
+    }
 
     // Method
-    String method_str = string_sub_cstr(allocator, (char *)lexer->buf, 0, lexer->buf_position - 1);
-    if (string_eq(method_str, string_lit("GET"))) {
+    String method = parser_extract_block(parser, parser->at - 1);
+    if (string_eq(method, string_lit("GET"))) {
         request->method = METHOD_GET;
-    } else if (string_eq(method_str, string_lit("PUT"))) {
+    } else if (string_eq(method, string_lit("PUT"))) {
         request->method = METHOD_PUT;
-    } else if (string_eq(method_str, string_lit("POST"))) {
+    } else if (string_eq(method, string_lit("POST"))) {
         request->method = METHOD_POST;
-    } else if (string_eq(method_str, string_lit("DELETE"))) {
+    } else if (string_eq(method, string_lit("DELETE"))) {
         request->method = METHOD_DELETE;
     } else {
-        return PARSE_ERROR_INVALID_METHOD;
+        parser->state = PARSER_STATE_FAILED;
+        return;
     }
 
     // Space
-    if (lexer->current_char != ' ') {
-        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
+    if (parser_get_char(parser) != ' ') {
+        parser->state = PARSER_STATE_FAILED;
+        return;
     }
 
     // URI
-    u32 uri_start = lexer->read_position;
-    do {
-        read_char(lexer);
-    } while (is_alphanum(lexer->current_char) || 
-             lexer->current_char == '/' ||
-             lexer->current_char == '.'
-    );
+    parser_read_char(parser);
+    parser_mark(parser, parser->at);
 
-    if (lexer->buf_position == uri_start) {
-        return PARSE_ERROR_INVALID_URI;
+    while (is_alphanum(parser_get_char(parser)) || 
+        parser_get_char(parser) == '/' ||
+        parser_get_char(parser) == '.') {
+        parser_read_char(parser);
     }
 
-    request->uri = string_sub_cstr(allocator, (char *)lexer->buf, uri_start, lexer->buf_position - 1);
+    String uri = parser_extract_block(parser, parser->at - 1);
+    if (string_eq(uri, string_lit(""))) {
+        parser->state = PARSER_STATE_FAILED;
+        return;
+    }
+
+    request->uri = uri;
 
     // Space
-    if (lexer->current_char != ' ') {
-        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
+    if (parser_get_char(parser) != ' ') {
+        parser->state = PARSER_STATE_FAILED;
+        return;
     }
 
     // Version
-    u32 version_size = 8; // len(HTTP/x.y)
-    char *version_data = allocator_alloc(allocator, version_size);
-    for (u32 i = 0; i < version_size; i++) { 
-        read_char(lexer);
-        version_data[i] = lexer->current_char;
+    parser_read_char(parser);
+    parser_mark(parser, parser->at);
+    for (u32 i = 0; i < 7; i++) { // len(HTTP/x.y)
+        parser_read_char(parser);
     }
 
-    request->version = string_with_len(version_data, version_size);
+    request->version = parser_extract_block(parser, parser->at);
 
     if (!string_eq(request->version, HTTP_VERSION_10) && 
         !string_eq(request->version, HTTP_VERSION_11)
     ) {
-        return PARSE_ERROR_INVALID_VERSION;
+        parser->state = PARSER_STATE_FAILED;
+        return;
     }
 
     // EOL
-    read_char(lexer);
-    if (lexer->current_char != '\r') {
-        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
+    parser_read_char(parser);
+    if (parser_get_char(parser) != '\r') {
+        parser->state = PARSER_STATE_FAILED;
+        return;
     }
 
-    read_char(lexer);
-    if (lexer->current_char != '\n') {
-        return PARSE_ERROR_MALFORMED_REQUEST_LINE;
+    parser_read_char(parser);
+    if (parser_get_char(parser) != '\n') {
+        parser->state = PARSER_STATE_FAILED;
+        return;
     }
 
-    return PARSE_ERROR_NO_ERROR;
-}
 
-static Parse_Error parse_headers(Allocator *allocator, Lexer *lexer, Request *request) {
-    do {
-        u32 field_name_start = lexer->read_position;
+    // Parse Headers
 
-        do {
-            read_char(lexer);
-        } while (is_alphanum(lexer->current_char) || 
-                 lexer->current_char == '-'       ||
-                 lexer->current_char == '_');
+    parser->state = PARSER_STATE_PARSING_HEADERS;
+
+    while (parser->state == PARSER_STATE_PARSING_HEADERS) {
+        parser_read_char(parser);
+        parser_mark(parser, parser->at);
+
+        while (parser_keep_going(parser) && 
+                (is_alphanum(parser_get_char(parser)) || 
+                parser_get_char(parser) == '-'        ||
+                parser_get_char(parser) == '_')
+        ) {
+            parser_read_char(parser);
+        }
 
         // si ya no quedan field names
-        if (lexer->read_position - field_name_start == 1) {
-            if (lexer->current_char != '\r') {
-                return PARSE_ERROR_MALFORMED_HEADER;
+        if (parser->marked_at == parser->at) {
+            if (parser_get_char(parser) != '\r') {
+                parser->state = PARSER_STATE_FAILED;
+                return;
             }
-            read_char(lexer);
-            if (lexer->current_char != '\n') {
-                return PARSE_ERROR_MALFORMED_HEADER;
+            parser_read_char(parser);
+            if (parser_get_char(parser) != '\n') {
+                parser->state = PARSER_STATE_FAILED;
+                return;
             }
-            return PARSE_ERROR_NO_ERROR;
+
+            parser->state = PARSER_STATE_PARSING_BODY;
+            break;
         }
         
-        if (lexer->current_char != ':') {
-            return PARSE_ERROR_MALFORMED_HEADER;
+        if (parser_get_char(parser) != ':') {
+            parser->state = PARSER_STATE_FAILED;
+            return;
         }
 
         // substring to lower case
-        u32 field_name_size = (lexer->read_position - 1) - field_name_start;
-        String substring = string_with_len((char *)&lexer->buf[field_name_start], field_name_size); 
-        String field_name = string_to_lower(allocator, substring);
+        String field_name = parser_extract_block(parser, parser->at - 1);
+        field_name = string_to_lower(parser->allocator, field_name);
 
         // espacio
-        read_char(lexer);
-        if (lexer->current_char != ' ') {
-            return PARSE_ERROR_MALFORMED_HEADER;
+        parser_read_char(parser);
+        if (parser_get_char(parser) != ' ') {
+            parser->state = PARSER_STATE_FAILED;
+            return;
         }
 
-        // field value
-        u32 field_value_start = lexer->read_position;
-        u32 field_value_end;
+        // field value + \r\n
+        parser_read_char(parser);
+        parser_mark(parser, parser->at);
 
-        do {
-            read_char(lexer);
-        } while (lexer->current_char != '\r');
+        while (parser_keep_going(parser) && parser_get_char(parser) != '\r') {
+            parser_read_char(parser);
+        }
 
-        field_value_end = lexer->buf_position - 1;
-        String field_value = string_sub_cstr(allocator, (char *)lexer->buf, field_value_start, field_value_end);
+        String field_value = parser_extract_block(parser, parser->at - 1);
         headers_put(&request->headers_map, field_name, field_value);
 
-        // \r\n
-        read_char(lexer);
-        if (lexer->current_char != '\n') {
-            return PARSE_ERROR_MALFORMED_HEADER;
-        }
+        parser_read_char(parser);
 
-    } while (lexer->current_char != '\r');
-
-    read_char(lexer);
-    if (lexer->current_char != '\n') {
-        return PARSE_ERROR_MALFORMED_HEADER;
+        if (parser_get_char(parser) != '\n') {
+            parser->state = PARSER_STATE_FAILED;
+            return;
+        } 
     }
 
-    return PARSE_ERROR_NO_ERROR;
-}
-
-static Parse_Error parse_body(Allocator *allocator, Lexer *lexer, Request *request) {
+    // Parse Body
+    
     String *content_length = headers_get(&request->headers_map, string_lit("content-length"));
 
     if (content_length != NULL) {
         i64 len = string_to_int(*content_length);
         if (len > 4 * KB) { 
-            return PARSE_ERROR_BODY_TOO_LARGE;
+            parser->state = PARSER_STATE_FAILED;
+            return;
         }
 
+        parser_read_char(parser);
+
         request->body.length = len;
-        request->body.data = &lexer->buf[lexer->read_position];
+        request->body.data = &parser->current_buffer->data[parser->at];
     }
 
-    return PARSE_ERROR_NO_ERROR;
+    parser->state = PARSER_STATE_FINISHED;
+}
+
+
+// Connection
+
+static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address) {
+    if (connection->allocator == NULL) {
+        connection->allocator = allocator_make(1 * MB) ;
+    } else {
+        allocator_reset(connection->allocator);
+    }
+
+    connection->file_descriptor = file_descriptor;
+    connection->host = string(inet_ntoa(address.sin_addr));
+    connection->port = ntohs(address.sin_port); 
+    connection->is_active = false;
+    connection->request = (Request){0};
+    headers_map_init(&connection->request.headers_map);
+    parser_init(&connection->parser, connection->allocator, file_descriptor);
 }
 
 static void connection_write(Allocator *allocator, i32 fd, Response response) {
@@ -341,16 +475,17 @@ static void connection_write(Allocator *allocator, i32 fd, Response response) {
     }
 }
 
-static void handle_parse_error(Allocator *allocator, i32 fd, Parse_Error err) {
-    Response response = {0};
-    response.status = 400;
-    headers_map_init(&response.headers);
-
-    const char *error_message = parse_error_messages[err];
-    response_write(allocator, &response, (u8 *)error_message, string_size(error_message));
-
-    connection_write(allocator, fd, response);
-}
+// TODO: ver que hacer con esto
+// static void handle_parse_error(Allocator *allocator) {
+//     Response response = {0};
+//     response.status = 400;
+//     headers_map_init(&response.headers);
+//
+//     const char *error_message = "request malformed";
+//     response_write(allocator, &response, (u8 *)error_message, string_size(error_message));
+//
+//     connection_write(allocator, fd, response);
+// }
 
 static void http_handler(Allocator *allocator, Request *req, Response *res) {
     String body = string("{ \"foo\": \"bar\" }");
@@ -384,27 +519,12 @@ static i32 set_nonblocking(i32 fd) {
 }
 
 
+// Server
+
 static void server_init(Server *server, i32 file_descriptor, Connection *connections, u32 max_connections) {
     server->file_descriptor = file_descriptor;
     server->connections_count = max_connections;
     server->connections = connections;
-}
-
-static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address) {
-    if (connection->allocator == NULL) {
-        connection->allocator = allocator_make(1 * MB) ;
-    } else {
-        allocator_reset(connection->allocator);
-    }
-
-    connection->file_descriptor = file_descriptor;
-    connection->host = string(inet_ntoa(address.sin_addr));
-    connection->port = ntohs(address.sin_port); 
-    connection->is_active = false;
-    connection->request = (Request){0};
-    headers_map_init(&connection->request.headers_map);
-    connection->parser = (Parser){0};
-    connection->parser.allocator = connection->allocator;
 }
 
 static Connection *server_find_connection(Server *server, i32 file_descriptor) {
@@ -427,6 +547,10 @@ static Connection *server_find_free_connection(Server *server) {
     return NULL;
 }
 
+
+
+// Signals
+
 static void signal_handler(i32 signal_number) {
     switch (signal_number) {
         case SIGINT:
@@ -436,7 +560,7 @@ static void signal_handler(i32 signal_number) {
     }
 }
 
-static i32 init_signals(void) {
+static i32 signals_init(void) {
     if (signal(SIGINT, &signal_handler) == SIG_ERR) {
         return -1;
     }
@@ -473,7 +597,7 @@ static void set_process_name(int argc, char *argv[], char *env[], char *name) {
 int main(int argc, char *argv[], char *env[]) {
     set_process_name(argc, argv, env, "HTTP_SERVER_GG");
 
-    if (init_signals() == -1) {
+    if (signals_init() == -1) {
         perror("error al iniciar las signals");
         exit(EXIT_FAILURE);
     }
@@ -588,59 +712,21 @@ int main(int argc, char *argv[], char *env[]) {
                     continue;
                 }
 
-                u8 buf[8 * KB];
-                Lexer lexer = {0};
-                init_lexer(&lexer, buf, 8 * KB);
+                parser_parse(&connection->parser, &connection->request);
 
-                i32 bytes_read = recv(connection->file_descriptor, lexer.buf, lexer.capacity, 0);
-                if (bytes_read == 0) {
-                    printf("el cliente cerro la conexion:%.*s\n", string_print(connection->host));
+                if (!(connection->parser.state == PARSER_STATE_FINISHED)) {
+                    connection->is_active = false;
 
-                    // TODO: ver como no repetir esto para cada error
                     if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
                         perror("error al eliminar un fd del epoll");
                     }
-                    connection->is_active = false;
-                    close(connection->file_descriptor);
-                    continue;
-                } else if (bytes_read == -1) {
-                    perror("error al leer del cliente\n");
-                    continue;
-                }
-                lexer.size = bytes_read - 1;
 
-                Parse_Error err = parse_request_line(connection->allocator, &lexer, &connection->request);
-                if (err) {
-                    handle_parse_error(connection->allocator, connection->file_descriptor, err);
-                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
-                        perror("error al eliminar un fd del epoll");
-                    }
-                    connection->is_active = false;
+                    printf("Conexion cerrada\n");
+
                     close(connection->file_descriptor);
-                    continue;
                 }
 
-                err = parse_headers(connection->allocator, &lexer, &connection->request);
-                if (err) {
-                    handle_parse_error(connection->allocator, connection->file_descriptor, err);
-                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
-                        perror("error al eliminar un fd del epoll");
-                    }
-                    connection->is_active = false;
-                    close(connection->file_descriptor);
-                    continue;
-                }
-
-                err = parse_body(connection->allocator, &lexer, &connection->request);
-                if (err) {
-                    handle_parse_error(connection->allocator, connection->file_descriptor, err);
-                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
-                        perror("error al eliminar un fd del epoll");
-                    }
-                    connection->is_active = false;
-                    close(connection->file_descriptor);
-                    continue;
-                }
+                // TODO: En algun lado me falta ver el tema del keep alive
 
                 Response response = {0};
                 headers_map_init(&response.headers);
