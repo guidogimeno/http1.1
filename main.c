@@ -183,19 +183,14 @@ static bool parser_keep_going(Parser *parser) {
     return parser->state != PARSER_STATE_FAILED;
 }
 
-static void parser_read_char(Parser *parser) {
-    if (parser->at + 1 < parser->bytes_read) {
-        parser->at++;
-        return;
-    } 
-
+static void parser_recv_from_socket(Parser *parser) {
     void *memory = allocator_alloc(parser->allocator, sizeof(Parser_Buffer) + MAX_PARSER_BUFFER_CAPACITY);
     Parser_Buffer *new_buffer = (Parser_Buffer *)memory;
     new_buffer->size = MAX_PARSER_BUFFER_CAPACITY;
     new_buffer->data = memory + sizeof(Parser_Buffer);
     new_buffer->next = NULL;
 
-    u32 bytes_read = recv(parser->file_descriptor, new_buffer->data, new_buffer->size, 0);
+    i32 bytes_read = recv(parser->file_descriptor, new_buffer->data, new_buffer->size, 0);
 
     if (bytes_read == 0 || bytes_read == -1) {
         parser->state = PARSER_STATE_FAILED;
@@ -214,6 +209,30 @@ static void parser_read_char(Parser *parser) {
 
     parser->last_buffer->next = new_buffer;
     parser->last_buffer = new_buffer;
+}
+
+static void parser_read_char(Parser *parser) {
+    if (parser->at + 1 < parser->bytes_read) {
+        parser->at++;
+        return;
+    } 
+
+    parser_recv_from_socket(parser);
+}
+
+static void parser_read_bytes(Parser *parser, u64 bytes_count) {
+    u64 first_buffer_pending_bytes = parser->bytes_read - parser->at;
+    u64 total_pending_bytes = first_buffer_pending_bytes;
+
+    while (total_pending_bytes < bytes_count) {
+        parser_recv_from_socket(parser);
+        total_pending_bytes += parser->bytes_read;
+    }
+
+    u64 other_buffers_pending_bytes = bytes_count - first_buffer_pending_bytes;
+    u64 parser_at = (other_buffers_pending_bytes - 1) % parser->current_buffer->size;
+
+    parser->at += parser_at;
 }
 
 static void parser_mark(Parser *parser, u32 at) {
@@ -243,16 +262,6 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
         return result;
     }
 
-    // 10
-    // 1 - 3 (0 - 9) -> 4ta -> 7
-    // 2 - entero -> 10
-    // 3 - 7 (0 - 9) -> 8ta -> 10 - 7 - 1 = 2
-    // total 17 - 6 = 11
-    // 
-    // 1: 10 - 3 = 7 <= ok
-    // 2: 10
-    // 3: 10 - 5 = 5 <- mal + 1
-    // total 17 - 6 = 11
     u32 buffer_max_size = first_buffer->size;
     u32 first_buffer_remaining_size = buffer_max_size - parser->marked_at;
     u32 middle_buffers_size = parser->marked_distance * buffer_max_size;
@@ -441,79 +450,21 @@ static void parser_parse(Parser *parser, Request *request) {
     String *content_length = headers_get(&request->headers_map, string_lit("content-length"));
 
     if (content_length != NULL) {
-        i64 len = string_to_int(*content_length);
-        if (len > 4 * KB) { 
+        i64 body_length = string_to_int(*content_length);
+        if (body_length > 4 * KB) { 
             parser->state = PARSER_STATE_FAILED;
             return;
         }
 
         parser_read_char(parser);
         parser_mark(parser, parser->at);
-
-        // FIX: Esto esta mal porque no lei todo el body, deberia seguir leyendo hasta agotarlo
-        
-        // Estamos sobrados
-        u64 total_bytes_read = parser->bytes_read - (parser->at + 1);
-        while (total_bytes_read < len) {
-            void *memory = allocator_alloc(parser->allocator, sizeof(Parser_Buffer) + MAX_PARSER_BUFFER_CAPACITY);
-            Parser_Buffer *new_buffer = (Parser_Buffer *)memory;
-            new_buffer->size = MAX_PARSER_BUFFER_CAPACITY;
-            new_buffer->data = memory + sizeof(Parser_Buffer);
-            new_buffer->next = NULL;
-
-            u32 bytes_read = recv(parser->file_descriptor, new_buffer->data, new_buffer->size, 0);
-
-            if (bytes_read == 0 || bytes_read == -1) {
-                parser->state = PARSER_STATE_FAILED;
-                return;
-            }
-
-            parser->at = 0;
-            parser->current_buffer = new_buffer;
-            parser->bytes_read = bytes_read;
-            parser->marked_distance++;
-
-            if (parser->first_buffer == NULL && parser->last_buffer == NULL) {
-                parser->first_buffer = new_buffer;
-                parser->last_buffer = new_buffer;
-            }
-
-            parser->last_buffer->next = new_buffer;
-            parser->last_buffer = new_buffer;
-
-            total_bytes_read += new_buffer->size;
-        }
-
-        // caso feliz
-        // total bytes read: 100
-        // at: 29 == 30 pos
-        // len: 20
-        // 29 + 20 = 49
-        //
-        // 20 % 100 = 20;
-        parser->at += len;
-
-        // caso no feliz
-        // total bytes read: 100
-        // at: 29 == 30 pos
-        // len: 250
-        // deseado: 2 buffers mas -> 29 del 0 - aca hay 70, + 100 del 1 - 170, + 80 del 2 - aca ya hay 250
-        // 250 % 100 = 50 + at
-        paser->at = len % parser->current_buffer.size;
-
-        // caso border
-        // total bytes read: 100
-        // at: 0 == 1 pos
-        // len: 100
-        // deseado: 100
-        //
-        // 100 % 100 = 0 * (marked_distance) ??
-        // 99 % 100 = 99
+        parser_read_bytes(parser, body_length);
 
         String body = parser_extract_block(parser, parser->at);
 
         request->body.length = body.size;
-        request->body.data = body.data;
+        request->body.data = (u8 *)body.data;
+        printf("Body recibido: %.*s\n", string_print(body));
     }
 
     parser->state = PARSER_STATE_FINISHED;
