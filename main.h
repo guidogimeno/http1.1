@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -110,6 +111,7 @@ struct Connection {
     i32 file_descriptor;
     String host;
     u16 port;
+    struct sockaddr_in address;
 
     bool is_active;
 
@@ -120,6 +122,8 @@ struct Connection {
 
 struct Server {
     i32 file_descriptor;
+
+    i32 epoll_file_descriptor;
 
     u32 connections_count;
     Connection *connections;

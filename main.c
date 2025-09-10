@@ -2,7 +2,64 @@
 
 static volatile bool main_running = true;
 
-static void headers_map_init(Headers_Map *headers_map) {
+static i32 start_listening(void);
+
+static void server_accept_client(Server *server, 
+    struct sockaddr_in *client_addr, socklen_t *client_addr_len);
+
+static Connection *server_find_connection(Server *server, i32 file_descriptor);
+static Connection *server_find_free_connection(Server *server);
+
+static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, 
+    u32 epoll_events);
+static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, 
+    i32 file_descriptor);
+
+static i32 start_listening(void) {
+    // creacion del socket
+    i32 file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
+    if (file_descriptor == -1) {
+        perror("error al crear socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // address reutilizable, no hace falta esperar al TIME_WAIT
+    i32 reuse = 1;
+    if (setsockopt(file_descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, 
+                    sizeof(reuse)) == -1) {
+        perror("error al realizar setsockopt(SO_REUSEADDR)");
+        exit(EXIT_FAILURE);
+    }
+    
+    // bind address al socket
+    struct sockaddr_in server_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(8080),
+        .sin_addr.s_addr = inet_addr("127.0.0.1"),
+    };
+    
+    if (bind(file_descriptor, (struct sockaddr *)&server_addr, 
+                sizeof(server_addr)) == -1) {
+        perror("error al realizar el bind");
+        exit(EXIT_FAILURE);
+    }
+    
+    // escuchar a traves del socket
+    if (listen(file_descriptor, MAX_CONNECTIONS) == -1) {
+        perror("error al realizar el listen");
+        exit(EXIT_FAILURE);
+    }
+
+    String server_host = string(inet_ntoa(server_addr.sin_addr));
+    u16 server_port = ntohs(server_addr.sin_port);
+
+    printf("Servidor escuchando en: %.*s:%d\n",
+            string_print(server_host), server_port);
+
+    return file_descriptor;
+}
+
+static void headers_init(Headers_Map *headers_map) {
     headers_map->length = 0;
     headers_map->capacity = MAX_HEADERS_CAPACITY;
     memset(headers_map->headers, 0, headers_map->capacity);
@@ -191,6 +248,11 @@ static void parser_recv_from_socket(Parser *parser) {
     new_buffer->next = NULL;
 
     i32 bytes_read = recv(parser->file_descriptor, new_buffer->data, new_buffer->size, 0);
+
+    if (bytes_read == -1 && errno == EAGAIN) {
+        // TODO: Ver que hago
+        assert(1 && "ver que hacer en estos casos");
+    }
 
     if (bytes_read == 0 || bytes_read == -1) {
         parser->state = PARSER_STATE_FAILED;
@@ -395,7 +457,8 @@ static void parser_parse(Parser *parser, Request *request) {
         }
 
         // si ya no quedan field names
-        if (parser->marked_at == parser->at && parser->marked_buffer == parser->current_buffer) {
+        if (parser->marked_at == parser->at 
+                && parser->marked_buffer == parser->current_buffer) {
             if (parser_get_char(parser) != '\r') {
                 parser->state = PARSER_STATE_FAILED;
                 return;
@@ -447,7 +510,8 @@ static void parser_parse(Parser *parser, Request *request) {
 
     // Parse Body
     
-    String *content_length = headers_get(&request->headers_map, string_lit("content-length"));
+    String *content_length = headers_get(&request->headers_map, 
+                                            string_lit("content-length"));
 
     if (content_length != NULL) {
         i64 body_length = string_to_int(*content_length);
@@ -473,7 +537,8 @@ static void parser_parse(Parser *parser, Request *request) {
 
 // Connection
 
-static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address) {
+static void connection_init(Connection *connection, i32 file_descriptor,
+    struct sockaddr_in address) {
     if (connection->allocator == NULL) {
         connection->allocator = allocator_make(1 * MB);
     } else {
@@ -483,16 +548,19 @@ static void connection_init(Connection *connection, i32 file_descriptor, struct 
     connection->file_descriptor = file_descriptor;
     connection->host = string(inet_ntoa(address.sin_addr));
     connection->port = ntohs(address.sin_port); 
+    connection->address = address; 
     connection->is_active = false;
     connection->request = (Request){0};
-    headers_map_init(&connection->request.headers_map);
+    headers_init(&connection->request.headers_map);
     parser_init(&connection->parser, connection->allocator, file_descriptor);
 }
 
 static void connection_write(Allocator *allocator, i32 fd, Response response) {
     String encoded_response = encode_response(allocator, response);
 
-    u32 bytes_written = send(fd, encoded_response.data, encoded_response.size, 0);
+    u32 bytes_written = send(fd, encoded_response.data, 
+                                encoded_response.size, 0);
+
     if (bytes_written != encoded_response.size) {
         perror("error al escribir al cliente");
         // TODO: Retornar un error o algo
@@ -503,7 +571,7 @@ static void connection_write(Allocator *allocator, i32 fd, Response response) {
 // static void handle_parse_error(Allocator *allocator) {
 //     Response response = {0};
 //     response.status = 400;
-//     headers_map_init(&response.headers);
+//     headers_init(&response.headers);
 //
 //     const char *error_message = "request malformed";
 //     response_write(allocator, &response, (u8 *)error_message, string_size(error_message));
@@ -518,24 +586,34 @@ static void http_handler(Allocator *allocator, Request *req, Response *res) {
     response_write(allocator, res, (u8 *)body.data, body.size);
 }
 
-static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events) {
+static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, 
+    u32 epoll_events) {
+
     struct epoll_event event;
     event.events = epoll_events;
     event.data.fd = fd;
     return epoll_ctl(epoll_file_descriptor, EPOLL_CTL_ADD, fd, &event);
 }
 
-static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 fd) {
-    return epoll_ctl(epoll_file_descriptor, EPOLL_CTL_DEL, fd, NULL);
+static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, 
+    i32 file_descriptor) {
+
+    i32 res = epoll_ctl(epoll_file_descriptor, EPOLL_CTL_DEL, file_descriptor, 
+                        NULL);
+    if (res == -1) {
+        return -1;
+    }
+
+    return close(file_descriptor);
 }
 
-static i32 set_nonblocking(i32 fd) {
-    i32 flags = fcntl(fd, F_GETFL, 0);
+static i32 set_nonblocking(i32 file_descriptor) {
+    i32 flags = fcntl(file_descriptor, F_GETFL);
     if (flags == -1) {
         return -1;
     }
 
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+    if (fcntl(file_descriptor, F_SETFL, flags | O_NONBLOCK) == -1) {
         return -1;
     }
 
@@ -545,10 +623,43 @@ static i32 set_nonblocking(i32 fd) {
 
 // Server
 
-static void server_init(Server *server, i32 file_descriptor, Connection *connections, u32 max_connections) {
-    server->file_descriptor = file_descriptor;
-    server->connections_count = max_connections;
-    server->connections = connections;
+static void server_accept_client(Server *server, 
+    struct sockaddr_in *client_addr, socklen_t *client_addr_len) {
+
+    i32 client_fd = accept(server->file_descriptor, 
+                            (struct sockaddr *)client_addr, client_addr_len);
+
+    if (client_fd == -1) {
+        perror("error al aceptar cliente");
+        return;
+    }
+    
+    if (set_nonblocking(client_fd) == -1) {
+        perror("error al setear el nonblocking");
+        close(client_fd);
+        return;
+    }
+
+    Connection *connection = server_find_free_connection(server);
+    if (connection == NULL) {
+        perror("no hay conexiones libres");
+        close(client_fd);
+        return;
+    }
+
+    if (epoll_events_add_file_descriptor(server->epoll_file_descriptor, 
+                                            client_fd,
+                                            EPOLLIN|EPOLLET) == -1) {
+        perror("error al agregar client_fd al epoll events");
+        close(client_fd);
+        return;
+    }
+
+    connection_init(connection, client_fd, *client_addr);
+    connection->is_active = true;
+
+    printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host),
+            connection->port);
 }
 
 static Connection *server_find_connection(Server *server, i32 file_descriptor) {
@@ -626,156 +737,105 @@ int main(int argc, char *argv[], char *env[]) {
         exit(EXIT_FAILURE);
     }
 
-    // creacion del socket
-    i32 server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == -1) {
-        perror("error al crear socket");
-        exit(EXIT_FAILURE);
-    }
+    Allocator *allocator = allocator_make(1 * GB);
 
-    Connection connections[MAX_CONNECTIONS] = {0};
-
-    Server server = {0};
-    server_init(&server, server_fd, connections, MAX_CONNECTIONS);
-    
-    // address reutilizable, no hace falta esperar al TIME_WAIT
-    i32 reuse = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse)) == -1) {
-        perror("error al realizar setsockopt(SO_REUSEADDR)");
-        exit(EXIT_FAILURE);
-    }
-    
-    // bind address al socket
-    struct sockaddr_in server_addr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(8080),
-        .sin_addr.s_addr = inet_addr("127.0.0.1"),
-    };
-    
-    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-        perror("error al realizar el bind");
-        exit(EXIT_FAILURE);
-    }
-    
-    // escuchar a traves del socket
-    if (listen(server_fd, MAX_CONNECTIONS) == -1) {
-        perror("error al realizar el listen");
-        exit(EXIT_FAILURE);
-    }
-    
-    String server_host = string(inet_ntoa(server_addr.sin_addr));
-    u16 server_port = ntohs(server_addr.sin_port);
-    printf("Servidor escuchando en: %.*s:%d\n", string_print(server_host), server_port);
-
-    struct sockaddr_in client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
-
-    // epoll
-    i32 epoll_events_count = 0;
-    struct epoll_event epoll_events[MAX_EPOLL_EVENTS];
+    i32 server_file_descriptor = start_listening();    
 
     i32 epoll_file_descriptor = epoll_create1(0);
     if (epoll_file_descriptor == -1) {
         exit(EXIT_FAILURE);
     }
 
-    if (epoll_events_add_file_descriptor(epoll_file_descriptor, server_fd, EPOLLIN) == -1) {
-        perror("error al agregar server_fd al epoll events");
+    if (epoll_events_add_file_descriptor(epoll_file_descriptor, 
+            server_file_descriptor, EPOLLIN|EPOLLET) == -1) {
         exit(EXIT_FAILURE);
     }
     
+
+    Server server = {0};
+    server.file_descriptor = server_file_descriptor;
+    server.epoll_file_descriptor = epoll_file_descriptor;
+    server.connections_count = MAX_CONNECTIONS;
+    server.connections = allocator_alloc(allocator, 
+                            sizeof(Connection) * server.connections_count);
+
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+
+    struct epoll_event epoll_events[MAX_EPOLL_EVENTS];
+
     // aceptar conexiones
-    while (main_running) {
-        epoll_events_count = epoll_wait(epoll_file_descriptor, epoll_events, MAX_EPOLL_EVENTS, -1);
-        if (epoll_events_count == -1) {
-            perror("epoll_wait()");
+    while (main_running == true) {
+        i32 epoll_events_count = epoll_wait(epoll_file_descriptor,
+                                    epoll_events, MAX_EPOLL_EVENTS, -1);
+
+        if (epoll_events_count == -1 && errno != EINTR) {
             continue;
         }
 
         for (u32 i = 0; i < epoll_events_count; i++) {
-            if (epoll_events[i].data.fd == server_fd) {
-                i32 client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-                if (client_fd == -1) {
-                    perror("error al aceptar cliente");
-                    continue;
-                }
-                
-                if (set_nonblocking(client_fd) == -1) {
-                    perror("error al setear el nonblocking");
-                    close(client_fd);
-                    continue;
-                }
+            i32 event_file_descriptor = epoll_events[i].data.fd;
 
-                if (epoll_events_add_file_descriptor(epoll_file_descriptor, client_fd, EPOLLIN) == -1) {
-                    perror("error al agregar client_fd al epoll events");
-                    close(client_fd);
-                    continue;
-                }
+            if (event_file_descriptor == server.file_descriptor) {
+                server_accept_client(&server, &client_addr, &client_addr_len);
+                continue;
+            }
 
-                Connection *connection = server_find_free_connection(&server);
-                if (connection == NULL) {
-                    perror("no hay conexiones libres");
-                    close(client_fd);
-                    continue;
-                }
+            Connection *connection = server_find_connection(&server,
+                                        event_file_descriptor);
+            if (connection == NULL) {
+                printf("error: no se logro encontrar la conexion\n");
 
-                connection_init(connection, client_fd, client_addr);
-                connection->is_active = true;
+                epoll_events_remove_file_descriptor(epoll_file_descriptor,
+                                                        event_file_descriptor);
 
-                printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host), connection->port);
-            } else {
-                Connection *connection = server_find_connection(&server, epoll_events[i].data.fd);
-                if (connection == NULL) {
-                    perror("no se logro encontrar la conexion en el pool de conexiones");
+                continue;
+            }
 
-                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, epoll_events[i].data.fd) == -1) {
-                        perror("error al eliminar un fd del epoll");
-                    }
+            parser_parse(&connection->parser, &connection->request);
 
-                    close(epoll_events[i].data.fd);
-                    continue;
-                }
+            if (!(connection->parser.state == PARSER_STATE_FINISHED)) {
+                printf("error: no se pudo parsear bien el request\n");
 
-                parser_parse(&connection->parser, &connection->request);
-
-                if (!(connection->parser.state == PARSER_STATE_FINISHED)) {
-                    connection->is_active = false;
-
-                    if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
-                        perror("error al eliminar un fd del epoll");
-                    }
-
-                    printf("Conexion cerrada por errores a la hora de parsear\n");
-
-                    close(connection->file_descriptor);
-
-                    continue;
-                }
-
-                // TODO: En algun lado me falta ver el tema del keep alive
-
-                Response response = {0};
-                headers_map_init(&response.headers);
-
-                http_handler(connection->allocator, &connection->request, &response);
-
-                connection_write(connection->allocator, connection->file_descriptor, response);
-
+                epoll_events_remove_file_descriptor(epoll_file_descriptor,
+                                                connection->file_descriptor);
                 connection->is_active = false;
 
-                if (epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor) == -1) {
-                    perror("error al eliminar un fd del epoll");
-                }
-
-                printf("Conexion cerrada porque ya se envio la respuesta\n");
-
-                close(connection->file_descriptor);
+                continue;
             }
+
+            Response response = {0};
+            headers_init(&response.headers);
+
+            http_handler(connection->allocator, &connection->request,
+                            &response);
+
+            connection_write(connection->allocator, 
+                                connection->file_descriptor, response);
+
+            // String *connection_header = headers_get(
+            //         &connection->request.headers_map,
+            //         string_lit("connection"));
+            //
+            // if (connection_header != NULL) {
+            //     if (string_eq(*connection_header, string_lit("Keep-Alive"))) {
+            //         allocator_reset(connection->allocator);
+            //         connection->is_active = true;
+            //         continue;
+            //     }
+            // } 
+
+
+            epoll_events_remove_file_descriptor(epoll_file_descriptor,
+                                                connection->file_descriptor);
+            connection->is_active = false;
+
+            printf("Conexion cerrada porque ya se envio la respuesta\n");
         }
     }
-      
-    close(epoll_file_descriptor);
-    close(server_fd);
+
+    close(server.epoll_file_descriptor);
+    close(server.file_descriptor);
     
     return EXIT_SUCCESS;
 }
