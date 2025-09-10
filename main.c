@@ -2,6 +2,11 @@
 
 static volatile bool main_running = true;
 
+static void set_process_name(int argc, char *argv[], char *env[], char *name);
+
+static void signal_handler(i32 signal_number);
+static i32 signals_init(void);
+
 static i32 start_listening(void);
 
 static void server_accept_client(Server *server, 
@@ -620,115 +625,6 @@ static i32 set_nonblocking(i32 file_descriptor) {
     return 0;
 }
 
-
-// Server
-
-static void server_accept_client(Server *server, 
-    struct sockaddr_in *client_addr, socklen_t *client_addr_len) {
-
-    i32 client_fd = accept(server->file_descriptor, 
-                            (struct sockaddr *)client_addr, client_addr_len);
-
-    if (client_fd == -1) {
-        perror("error al aceptar cliente");
-        return;
-    }
-    
-    if (set_nonblocking(client_fd) == -1) {
-        perror("error al setear el nonblocking");
-        close(client_fd);
-        return;
-    }
-
-    Connection *connection = server_find_free_connection(server);
-    if (connection == NULL) {
-        perror("no hay conexiones libres");
-        close(client_fd);
-        return;
-    }
-
-    if (epoll_events_add_file_descriptor(server->epoll_file_descriptor, 
-                                            client_fd,
-                                            EPOLLIN|EPOLLET) == -1) {
-        perror("error al agregar client_fd al epoll events");
-        close(client_fd);
-        return;
-    }
-
-    connection_init(connection, client_fd, *client_addr);
-    connection->is_active = true;
-
-    printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host),
-            connection->port);
-}
-
-static Connection *server_find_connection(Server *server, i32 file_descriptor) {
-    for (u32 i = 0; i < server->connections_count; i++) {
-        if (server->connections[i].file_descriptor == file_descriptor) {
-            return &server->connections[i];
-        }
-    }
-
-    return NULL;
-}
-
-static Connection *server_find_free_connection(Server *server) {
-    for (u32 i = 0; i < server->connections_count; i++) {
-        if (server->connections[i].is_active == false) {
-            return &server->connections[i];
-        }
-    }
-
-    return NULL;
-}
-
-
-
-// Signals
-
-static void signal_handler(i32 signal_number) {
-    switch (signal_number) {
-        case SIGINT:
-            main_running = false;
-            break;
-        default: break;
-    }
-}
-
-static i32 signals_init(void) {
-    if (signal(SIGINT, &signal_handler) == SIG_ERR) {
-        return -1;
-    }
-
-    if (signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
-        return -1;
-    }
-
-    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
-        return -1;
-    }
-    
-    return 0;
-}
-
-static void set_process_name(int argc, char *argv[], char *env[], char *name) {
-    size_t available = 0, length = strlen(name) + 1;
-
-    if (argc >= 1) {
-        available += strlen(argv[0]);
-    }
-
-    for (i32 n = 0; env[n] != NULL; n ++) {
-        available += strlen(env[0]);
-    }
-
-    if (length > available) {
-        return;
-    }
-
-    memcpy(argv[0], name, length);
-}
-
 int main(int argc, char *argv[], char *env[]) {
     set_process_name(argc, argv, env, "HTTP_SERVER_GG");
 
@@ -839,4 +735,107 @@ int main(int argc, char *argv[], char *env[]) {
     
     return EXIT_SUCCESS;
 }
+
+static void set_process_name(int argc, char *argv[], char *env[], char *name) {
+    size_t available = 0, length = strlen(name) + 1;
+
+    if (argc >= 1) {
+        available += strlen(argv[0]);
+    }
+
+    for (i32 n = 0; env[n] != NULL; n ++) {
+        available += strlen(env[0]);
+    }
+
+    if (length > available) {
+        return;
+    }
+
+    memcpy(argv[0], name, length);
+}
+
+static void signal_handler(i32 signal_number) {
+    switch (signal_number) {
+        case SIGINT:
+            main_running = false;
+            break;
+        default: break;
+    }
+}
+
+static i32 signals_init(void) {
+    if (signal(SIGINT, &signal_handler) == SIG_ERR) {
+        return -1;
+    }
+
+    if (signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
+        return -1;
+    }
+
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        return -1;
+    }
+    
+    return 0;
+}
+
+static void server_accept_client(Server *server, 
+    struct sockaddr_in *client_addr, socklen_t *client_addr_len) {
+
+    i32 client_fd = accept(server->file_descriptor, 
+                            (struct sockaddr *)client_addr, client_addr_len);
+
+    if (client_fd == -1) {
+        perror("error al aceptar cliente");
+        return;
+    }
+    
+    if (set_nonblocking(client_fd) == -1) {
+        perror("error al setear el nonblocking");
+        close(client_fd);
+        return;
+    }
+
+    Connection *connection = server_find_free_connection(server);
+    if (connection == NULL) {
+        perror("no hay conexiones libres");
+        close(client_fd);
+        return;
+    }
+
+    if (epoll_events_add_file_descriptor(server->epoll_file_descriptor, 
+                                            client_fd,
+                                            EPOLLIN|EPOLLET) == -1) {
+        perror("error al agregar client_fd al epoll events");
+        close(client_fd);
+        return;
+    }
+
+    connection_init(connection, client_fd, *client_addr);
+    connection->is_active = true;
+
+    printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host),
+            connection->port);
+}
+
+static Connection *server_find_connection(Server *server, i32 file_descriptor) {
+    for (u32 i = 0; i < server->connections_count; i++) {
+        if (server->connections[i].file_descriptor == file_descriptor) {
+            return &server->connections[i];
+        }
+    }
+
+    return NULL;
+}
+
+static Connection *server_find_free_connection(Server *server) {
+    for (u32 i = 0; i < server->connections_count; i++) {
+        if (server->connections[i].is_active == false) {
+            return &server->connections[i];
+        }
+    }
+
+    return NULL;
+}
+
 
