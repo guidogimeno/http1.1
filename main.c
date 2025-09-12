@@ -4,8 +4,8 @@ static volatile bool main_running = true;
 
 static void set_process_name(int argc, char *argv[], char *env[], char *name);
 
-static void signal_handler(i32 signal_number);
 static i32 signals_init(void);
+static void signal_handler(i32 signal_number);
 
 static i32 start_listening(void);
 
@@ -19,6 +19,20 @@ static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd,
     u32 epoll_events);
 static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, 
     i32 file_descriptor);
+
+
+static void parser_init(Parser *parser, Allocator * allocator,
+    i32 file_descriptor);
+static char parser_get_char(Parser *parser);
+static Parser_Buffer *parser_push_buffer(Parser *parser);
+static u32 parser_parse(Parser *parser, Request *request);
+
+static void connection_init(Connection *connection, i32 file_descriptor,
+    struct sockaddr_in address);
+static i32 connection_handle(Connection *connection);
+static void connection_write(Allocator *allocator, i32 fd, Response response);
+
+static void http_handler(Allocator *allocator, Request *req, Response *res);
 
 static i32 start_listening(void) {
     // creacion del socket
@@ -70,7 +84,8 @@ static void headers_init(Headers_Map *headers_map) {
     memset(headers_map->headers, 0, headers_map->capacity);
 }
 
-static void headers_put(Headers_Map *headers_map, String field_name, String field_value) {
+static void headers_put(Headers_Map *headers_map, String field_name,
+    String field_value) {
     u32 headers_cap = headers_map->capacity;
 
     // TODO: Esto deberia crecer
@@ -222,7 +237,8 @@ static bool is_alphanum(char ch) {
 
 // Parser
 
-static void parser_init(Parser *parser, Allocator * allocator, i32 file_descriptor) {
+static void parser_init(Parser *parser, Allocator * allocator,
+    i32 file_descriptor) {
     *parser = (Parser){0};
     parser->file_descriptor = file_descriptor;
     parser->allocator = allocator;
@@ -241,66 +257,66 @@ static char parser_get_char(Parser *parser) {
     return parser->current_buffer->data[parser->at];
 }
 
-static bool parser_keep_going(Parser *parser) {
-    return parser->state != PARSER_STATE_FAILED;
-}
+// static bool parser_keep_going(Parser *parser) {
+//     return parser->state != PARSER_STATE_FAILED;
+// }
 
-static void parser_recv_from_socket(Parser *parser) {
-    void *memory = allocator_alloc(parser->allocator, sizeof(Parser_Buffer) + MAX_PARSER_BUFFER_CAPACITY);
-    Parser_Buffer *new_buffer = (Parser_Buffer *)memory;
-    new_buffer->size = MAX_PARSER_BUFFER_CAPACITY;
-    new_buffer->data = memory + sizeof(Parser_Buffer);
-    new_buffer->next = NULL;
+// static void parser_recv_from_socket(Parser *parser) {
+//     void *memory = allocator_alloc(parser->allocator, sizeof(Parser_Buffer) + MAX_PARSER_BUFFER_CAPACITY);
+//     Parser_Buffer *new_buffer = (Parser_Buffer *)memory;
+//     new_buffer->size = MAX_PARSER_BUFFER_CAPACITY;
+//     new_buffer->data = memory + sizeof(Parser_Buffer);
+//     new_buffer->next = NULL;
+//
+//     i32 bytes_read = recv(parser->file_descriptor, new_buffer->data, new_buffer->size, 0);
+//
+//     if (bytes_read == -1 && errno == EAGAIN) {
+//         // TODO: Ver que hago
+//         assert(1 && "ver que hacer en estos casos");
+//     }
+//
+//     if (bytes_read == 0 || bytes_read == -1) {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//     parser->at = 0;
+//     parser->current_buffer = new_buffer;
+//     parser->bytes_read = bytes_read;
+//     parser->marked_distance++;
+//
+//     if (parser->first_buffer == NULL && parser->last_buffer == NULL) {
+//         parser->first_buffer = new_buffer;
+//         parser->last_buffer = new_buffer;
+//     }
+//
+//     parser->last_buffer->next = new_buffer;
+//     parser->last_buffer = new_buffer;
+// }
 
-    i32 bytes_read = recv(parser->file_descriptor, new_buffer->data, new_buffer->size, 0);
+// static void parser_read_char(Parser *parser) {
+//     if (parser->at + 1 < parser->bytes_read) {
+//         parser->at++;
+//         return;
+//     } 
+//
+//     parser_recv_from_socket(parser);
+// }
 
-    if (bytes_read == -1 && errno == EAGAIN) {
-        // TODO: Ver que hago
-        assert(1 && "ver que hacer en estos casos");
-    }
-
-    if (bytes_read == 0 || bytes_read == -1) {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
-
-    parser->at = 0;
-    parser->current_buffer = new_buffer;
-    parser->bytes_read = bytes_read;
-    parser->marked_distance++;
-
-    if (parser->first_buffer == NULL && parser->last_buffer == NULL) {
-        parser->first_buffer = new_buffer;
-        parser->last_buffer = new_buffer;
-    }
-
-    parser->last_buffer->next = new_buffer;
-    parser->last_buffer = new_buffer;
-}
-
-static void parser_read_char(Parser *parser) {
-    if (parser->at + 1 < parser->bytes_read) {
-        parser->at++;
-        return;
-    } 
-
-    parser_recv_from_socket(parser);
-}
-
-static void parser_read_bytes(Parser *parser, u64 bytes_count) {
-    u64 first_buffer_pending_bytes = parser->bytes_read - parser->at;
-    u64 total_pending_bytes = first_buffer_pending_bytes;
-
-    while (total_pending_bytes < bytes_count) {
-        parser_recv_from_socket(parser);
-        total_pending_bytes += parser->bytes_read;
-    }
-
-    u64 other_buffers_pending_bytes = bytes_count - first_buffer_pending_bytes;
-    u64 parser_at = (other_buffers_pending_bytes - 1) % parser->current_buffer->size;
-
-    parser->at += parser_at;
-}
+// static void parser_read_bytes(Parser *parser, u64 bytes_count) {
+//     u64 first_buffer_pending_bytes = parser->bytes_read - parser->at;
+//     u64 total_pending_bytes = first_buffer_pending_bytes;
+//
+//     while (total_pending_bytes < bytes_count) {
+//         parser_recv_from_socket(parser);
+//         total_pending_bytes += parser->bytes_read;
+//     }
+//
+//     u64 other_buffers_pending_bytes = bytes_count - first_buffer_pending_bytes;
+//     u64 parser_at = (other_buffers_pending_bytes - 1) % parser->current_buffer->size;
+//
+//     parser->at += parser_at;
+// }
 
 static void parser_mark(Parser *parser, u32 at) {
     parser->marked_buffer = parser->current_buffer;
@@ -309,6 +325,7 @@ static void parser_mark(Parser *parser, u32 at) {
 }
 
 static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
+
     Parser_Buffer *first_buffer = parser->marked_buffer;
     Parser_Buffer *last_buffer = parser->current_buffer;
 
@@ -359,185 +376,524 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
     return result;
 }
 
-static void parser_parse(Parser *parser, Request *request) {
-    parser->state = PARSER_STATE_PARSING_REQUEST_LINE;
+static i32 connection_handle(Connection *connection) {
 
-    parser_read_char(parser);
-    parser_mark(parser, parser->at);
+    Parser *parser = &connection->parser;
+    Request *request = &connection->request;
 
-    // Parse Request Line
-    while (is_letter(parser_get_char(parser)) && parser_keep_going(parser)) {
-        parser_read_char(parser);
-    }
+    while (true) {
 
-    // Method
-    String method = parser_extract_block(parser, parser->at - 1);
-    if (string_eq(method, string_lit("GET"))) {
-        request->method = METHOD_GET;
-    } else if (string_eq(method, string_lit("PUT"))) {
-        request->method = METHOD_PUT;
-    } else if (string_eq(method, string_lit("POST"))) {
-        request->method = METHOD_POST;
-    } else if (string_eq(method, string_lit("DELETE"))) {
-        request->method = METHOD_DELETE;
-    } else {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
+        Parser_Buffer *buffer = parser_push_buffer(parser); 
 
-    // Space
-    if (parser_get_char(parser) != ' ') {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
+        parser->bytes_read = recv(parser->file_descriptor, buffer->data, 
+                                    buffer->size, 0);
 
-    // URI
-    parser_read_char(parser);
-    parser_mark(parser, parser->at);
-
-    while (is_alphanum(parser_get_char(parser)) || 
-        parser_get_char(parser) == '/' ||
-        parser_get_char(parser) == '.') {
-        parser_read_char(parser);
-    }
-
-    String uri = parser_extract_block(parser, parser->at - 1);
-    if (string_eq(uri, string_lit(""))) {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
-
-    request->uri = uri;
-
-    // Space
-    if (parser_get_char(parser) != ' ') {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
-
-    // Version
-    parser_read_char(parser);
-    parser_mark(parser, parser->at);
-    for (u32 i = 0; i < 7; i++) { // len(HTTP/x.y)
-        parser_read_char(parser);
-    }
-
-    request->version = parser_extract_block(parser, parser->at);
-
-    if (!string_eq(request->version, HTTP_VERSION_10) && 
-        !string_eq(request->version, HTTP_VERSION_11)
-    ) {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
-
-    // EOL
-    parser_read_char(parser);
-    if (parser_get_char(parser) != '\r') {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
-
-    parser_read_char(parser);
-    if (parser_get_char(parser) != '\n') {
-        parser->state = PARSER_STATE_FAILED;
-        return;
-    }
-
-
-    // Parse Headers
-
-    parser->state = PARSER_STATE_PARSING_HEADERS;
-
-    while (parser->state == PARSER_STATE_PARSING_HEADERS) {
-        parser_read_char(parser);
-        parser_mark(parser, parser->at);
-
-        while (parser_keep_going(parser) && 
-                (is_alphanum(parser_get_char(parser)) || 
-                parser_get_char(parser) == '-'        ||
-                parser_get_char(parser) == '_')
-        ) {
-            parser_read_char(parser);
-        }
-
-        // si ya no quedan field names
-        if (parser->marked_at == parser->at 
-                && parser->marked_buffer == parser->current_buffer) {
-            if (parser_get_char(parser) != '\r') {
+        if (parser->bytes_read == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 parser->state = PARSER_STATE_FAILED;
-                return;
             }
-            parser_read_char(parser);
-            if (parser_get_char(parser) != '\n') {
-                parser->state = PARSER_STATE_FAILED;
-                return;
-            }
-
-            parser->state = PARSER_STATE_PARSING_BODY;
             break;
         }
-        
-        if (parser_get_char(parser) != ':') {
+
+        if (parser->bytes_read == 0) {
             parser->state = PARSER_STATE_FAILED;
-            return;
+            break;
         }
 
-        // substring to lower case
-        String field_name = parser_extract_block(parser, parser->at - 1);
-        field_name = string_to_lower(parser->allocator, field_name);
+        u32 bytes_parsed = 0;
 
-        // espacio
-        parser_read_char(parser);
-        if (parser_get_char(parser) != ' ') {
-            parser->state = PARSER_STATE_FAILED;
-            return;
+        while (bytes_parsed < parser->bytes_read) {
+            
+            bytes_parsed += parser_parse(parser, request);
+
+            if (parser->state == PARSER_STATE_FAILED) {
+                printf("error: parser_parse\n");
+                break;
+            }
+            
+            if (parser->state == PARSER_STATE_FINISHED) {
+                // ejecutar request handler
+                // enviar la resputesta
+                // resetear parser? y hasta quizas request
+                // break;
+
+                Response response = {0};
+                headers_init(&response.headers);
+
+                http_handler(connection->allocator, &connection->request,
+                                &response);
+
+                connection_write(connection->allocator, 
+                                    connection->file_descriptor, response);
+
+                parser->state = PARSER_STATE_STARTED;
+            }
         }
 
-        // field value + \r\n
-        parser_read_char(parser);
-        parser_mark(parser, parser->at);
-
-        while (parser_keep_going(parser) && parser_get_char(parser) != '\r') {
-            parser_read_char(parser);
+        if (parser->state == PARSER_STATE_FAILED) {
+            break;
         }
 
-        String field_value = parser_extract_block(parser, parser->at - 1);
-        headers_put(&request->headers_map, field_name, field_value);
-
-        parser_read_char(parser);
-
-        if (parser_get_char(parser) != '\n') {
-            parser->state = PARSER_STATE_FAILED;
-            return;
-        } 
+        if (parser->bytes_read < buffer->size) {
+            break;
+        }
     }
 
-    // Parse Body
-    
-    String *content_length = headers_get(&request->headers_map, 
-                                            string_lit("content-length"));
-
-    if (content_length != NULL) {
-        i64 body_length = string_to_int(*content_length);
-        if (body_length > 4 * KB) { 
-            parser->state = PARSER_STATE_FAILED;
-            return;
-        }
-
-        parser_read_char(parser);
-        parser_mark(parser, parser->at);
-        parser_read_bytes(parser, body_length);
-
-        String body = parser_extract_block(parser, parser->at);
-
-        request->body.length = body.size;
-        request->body.data = (u8 *)body.data;
-        printf("Body recibido: %.*s\n", string_print(body));
+    if (parser->state == PARSER_STATE_FAILED) {
+        return -1;
     }
 
-    parser->state = PARSER_STATE_FINISHED;
+    String *connection_value = headers_get(&connection->request.headers_map,
+                                            string_lit("connection"));
+    if (connection_value != NULL) {
+        if (string_eq(*connection_value, string_lit("Keep-Alive"))) {
+            connection_init(connection, connection->file_descriptor, 
+                                connection->address);
+            connection->is_active = true;
+            return 0;
+        }
+    } 
+
+    return -1;
 }
+
+static Parser_Buffer *parser_push_buffer(Parser *parser) {
+    void *memory = allocator_alloc(parser->allocator, 
+                        sizeof(Parser_Buffer) + MAX_PARSER_BUFFER_CAPACITY);
+
+    Parser_Buffer *new_buffer = (Parser_Buffer *)memory;
+    new_buffer->size = MAX_PARSER_BUFFER_CAPACITY;
+    new_buffer->data = memory + sizeof(Parser_Buffer);
+    new_buffer->next = NULL;
+
+    parser->at = 0;
+    parser->current_buffer = new_buffer;
+    parser->marked_distance++;
+
+    if (parser->first_buffer == NULL && parser->last_buffer == NULL) {
+        parser->first_buffer = new_buffer;
+        parser->last_buffer = new_buffer;
+    }
+
+    parser->last_buffer->next = new_buffer;
+    parser->last_buffer = new_buffer;
+
+    return new_buffer;
+}
+
+static u32 parser_parse(Parser *parser, Request *request) {
+    u32 parser_start_position = parser->at;
+
+    while (parser->at < parser->bytes_read) {
+
+        char c = parser_get_char(parser);
+
+        switch (parser->state) {
+
+            case PARSER_STATE_STARTED: 
+
+                parser_mark(parser, parser->at);
+                parser->state = PARSER_STATE_PARSING_METHOD;
+
+                break;
+
+            case PARSER_STATE_PARSING_METHOD:
+
+                if (is_letter(c)) {
+                    break;
+                }
+
+                if (c != ' ') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                String method = parser_extract_block(parser, parser->at - 1);
+
+                if (string_eq(method, string_lit("GET"))) {
+                    request->method = METHOD_GET;
+                } else if (string_eq(method, string_lit("PUT"))) {
+                    request->method = METHOD_PUT;
+                } else if (string_eq(method, string_lit("POST"))) {
+                    request->method = METHOD_POST;
+                } else if (string_eq(method, string_lit("DELETE"))) {
+                    request->method = METHOD_DELETE;
+                } else {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_URI;
+
+                break;
+
+            case PARSER_STATE_PARSING_SPACE_BEFORE_URI:
+
+                parser_mark(parser, parser->at);
+                parser->state = PARSER_STATE_PARSING_URI;
+
+                break;
+
+            case PARSER_STATE_PARSING_URI:
+
+                if (is_alphanum(c) || c == '/' || c == '.') {
+                    break;
+                }
+
+                if (c != ' ') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                String uri = parser_extract_block(parser, parser->at - 1);
+                
+                request->uri = uri;
+
+                parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_VERSION;
+
+                break;
+
+            case PARSER_STATE_PARSING_SPACE_BEFORE_VERSION:
+
+                parser_mark(parser, parser->at);
+                parser->state = PARSER_STATE_PARSING_VERSION;
+
+                break;
+
+            case PARSER_STATE_PARSING_VERSION:
+
+                if (c == 'H' ||
+                    c == 'T' ||
+                    c == 'P' ||
+                    c == '/' ||
+                    c == '1' ||
+                    c == '0' ||
+                    c == '.'
+                ) {
+                    break;
+                }
+
+                if (c != '\r') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                String version = parser_extract_block(parser, parser->at - 1);
+
+                if (!string_eq(version, HTTP_VERSION_10) && 
+                    !string_eq(version, HTTP_VERSION_11)
+                ) {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                request->version = version;
+
+                parser->state = PARSER_STATE_PARSING_END_OF_REQUEST_LINE;
+
+                break;
+
+            case PARSER_STATE_PARSING_END_OF_REQUEST_LINE:
+
+                if (c != '\n') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                parser->state = PARSER_STATE_PARSING_HEADER_KEY_BEGIN;
+
+                break;
+
+            case PARSER_STATE_PARSING_HEADER_KEY_BEGIN:
+
+                if (c == '\r') {
+                    parser->state = PARSER_STATE_PARSING_HEADERS_END;
+                    break;
+                }
+
+
+                if (!is_alphanum(c)) {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                parser_mark(parser, parser->at);
+                parser->state = PARSER_STATE_PARSING_HEADER_KEY;
+
+                break;
+
+            case PARSER_STATE_PARSING_HEADER_KEY:
+                
+                if (is_alphanum(c) || c == '-' || c == '_') {
+                    break;
+                }
+
+                if (c != ':') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                String key = parser_extract_block(parser, parser->at - 1);
+                parser->header_name = string_to_lower(parser->allocator, key);
+
+                parser->state = PARSER_STATE_PARSING_HEADER_SPACE;
+
+                break;
+
+            case PARSER_STATE_PARSING_HEADER_SPACE:
+
+                if (c != ' ') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                parser->state = PARSER_STATE_PARSING_HEADER_VALUE_BEGIN;
+
+                break;
+
+            case PARSER_STATE_PARSING_HEADER_VALUE_BEGIN:
+
+                if (c == '\r') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                parser_mark(parser, parser->at);
+                parser->state = PARSER_STATE_PARSING_HEADER_VALUE;
+
+                break;
+
+            case PARSER_STATE_PARSING_HEADER_VALUE:
+
+                if (c != '\r') {
+                    break;
+                }
+
+                String value = parser_extract_block(parser, parser->at - 1);
+                
+                headers_put(&request->headers_map, parser->header_name, value);
+
+                parser->state = PARSER_STATE_PARSING_HEADER_VALUE_END;
+
+                break;
+
+            case PARSER_STATE_PARSING_HEADER_VALUE_END:
+                
+                if (c != '\n') {
+                    parser->state = PARSER_STATE_FAILED;
+                    return 0;
+                }
+
+                parser->state = PARSER_STATE_PARSING_HEADER_KEY;
+
+                break;
+                
+            case PARSER_STATE_PARSING_HEADERS_END:
+
+                if (c != '\n') {
+                    parser->state = PARSER_STATE_PARSING_HEADER_VALUE;
+                    return 0;
+                }
+
+                parser->state = PARSER_STATE_PARSING_BODY;
+
+                break;
+
+            case PARSER_STATE_PARSING_BODY:
+                
+                assert(1 && "TODO");
+
+                break;
+
+
+            default: assert(1 && "assert: parser_parse: caso no contemplado");
+        }
+
+        parser->at++;
+    }
+
+    return parser->at - parser_start_position;
+}
+
+// static void parser_parse__(Parser *parser, Request *request) {
+//     parser->state = PARSER_STATE_PARSING_REQUEST_LINE;
+//
+//     parser_read_char(parser);
+//     parser_mark(parser, parser->at);
+//
+//     // Parse Request Line
+//     while (is_letter(parser_get_char(parser)) && parser_keep_going(parser)) {
+//         parser_read_char(parser);
+//     }
+//
+//     // Method
+//     String method = parser_extract_block(parser, parser->at - 1);
+//     if (string_eq(method, string_lit("GET"))) {
+//         request->method = METHOD_GET;
+//     } else if (string_eq(method, string_lit("PUT"))) {
+//         request->method = METHOD_PUT;
+//     } else if (string_eq(method, string_lit("POST"))) {
+//         request->method = METHOD_POST;
+//     } else if (string_eq(method, string_lit("DELETE"))) {
+//         request->method = METHOD_DELETE;
+//     } else {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//     // Space
+//     if (parser_get_char(parser) != ' ') {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//     // URI
+//     parser_read_char(parser);
+//     parser_mark(parser, parser->at);
+//
+//     while (is_alphanum(parser_get_char(parser)) || 
+//         parser_get_char(parser) == '/' ||
+//         parser_get_char(parser) == '.') {
+//         parser_read_char(parser);
+//     }
+//
+//     String uri = parser_extract_block(parser, parser->at - 1);
+//     if (string_eq(uri, string_lit(""))) {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//     request->uri = uri;
+//
+//     // Space
+//     if (parser_get_char(parser) != ' ') {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//     // Version
+//     parser_read_char(parser);
+//     parser_mark(parser, parser->at);
+//     for (u32 i = 0; i < 7; i++) { // len(HTTP/x.y)
+//         parser_read_char(parser);
+//     }
+//
+//     request->version = parser_extract_block(parser, parser->at);
+//
+//     if (!string_eq(request->version, HTTP_VERSION_10) && 
+//         !string_eq(request->version, HTTP_VERSION_11)
+//     ) {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//     // EOL
+//     parser_read_char(parser);
+//     if (parser_get_char(parser) != '\r') {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//     parser_read_char(parser);
+//     if (parser_get_char(parser) != '\n') {
+//         parser->state = PARSER_STATE_FAILED;
+//         return;
+//     }
+//
+//
+//     // Parse Headers
+//
+//     parser->state = PARSER_STATE_PARSING_HEADERS;
+//
+//     while (parser->state == PARSER_STATE_PARSING_HEADERS) {
+//         parser_read_char(parser);
+//         parser_mark(parser, parser->at);
+//
+//         while (parser_keep_going(parser) && 
+//                 (is_alphanum(parser_get_char(parser)) || 
+//                 parser_get_char(parser) == '-'        ||
+//                 parser_get_char(parser) == '_')
+//         ) {
+//             parser_read_char(parser);
+//         }
+//
+//         // si ya no quedan field names
+//         if (parser->marked_at == parser->at 
+//                 && parser->marked_buffer == parser->current_buffer) {
+//             if (parser_get_char(parser) != '\r') {
+//                 parser->state = PARSER_STATE_FAILED;
+//                 return;
+//             }
+//             parser_read_char(parser);
+//             if (parser_get_char(parser) != '\n') {
+//                 parser->state = PARSER_STATE_FAILED;
+//                 return;
+//             }
+//
+//             parser->state = PARSER_STATE_PARSING_BODY;
+//             break;
+//         }
+//        
+//         if (parser_get_char(parser) != ':') {
+//             parser->state = PARSER_STATE_FAILED;
+//             return;
+//         }
+//
+//         // substring to lower case
+//         String field_name = parser_extract_block(parser, parser->at - 1);
+//         field_name = string_to_lower(parser->allocator, field_name);
+//
+//         // espacio
+//         parser_read_char(parser);
+//         if (parser_get_char(parser) != ' ') {
+//             parser->state = PARSER_STATE_FAILED;
+//             return;
+//         }
+//
+//         // field value + \r\n
+//         parser_read_char(parser);
+//         parser_mark(parser, parser->at);
+//
+//         while (parser_keep_going(parser) && parser_get_char(parser) != '\r') {
+//             parser_read_char(parser);
+//         }
+//
+//         String field_value = parser_extract_block(parser, parser->at - 1);
+//         headers_put(&request->headers_map, field_name, field_value);
+//
+//         parser_read_char(parser);
+//
+//         if (parser_get_char(parser) != '\n') {
+//             parser->state = PARSER_STATE_FAILED;
+//             return;
+//         } 
+//     }
+//
+//     // Parse Body
+//    
+//     String *content_length = headers_get(&request->headers_map, 
+//                                             string_lit("content-length"));
+//
+//     if (content_length != NULL) {
+//         i64 body_length = string_to_int(*content_length);
+//         if (body_length > 4 * KB) { 
+//             parser->state = PARSER_STATE_FAILED;
+//             return;
+//         }
+//
+//         parser_read_char(parser);
+//         parser_mark(parser, parser->at);
+//         parser_read_bytes(parser, body_length);
+//
+//         String body = parser_extract_block(parser, parser->at);
+//
+//         request->body.length = body.size;
+//         request->body.data = (u8 *)body.data;
+//         printf("Body recibido: %.*s\n", string_print(body));
+//     }
+//
+//     parser->state = PARSER_STATE_FINISHED;
+// }
 
 
 // Connection
@@ -688,45 +1044,12 @@ int main(int argc, char *argv[], char *env[]) {
                 continue;
             }
 
-            parser_parse(&connection->parser, &connection->request);
-
-            if (!(connection->parser.state == PARSER_STATE_FINISHED)) {
-                printf("error: no se pudo parsear bien el request\n");
-
+            i32 res = connection_handle(connection);
+            if (res == -1) { // TODO: deberia ser un connection state o un request state?
                 epoll_events_remove_file_descriptor(epoll_file_descriptor,
                                                 connection->file_descriptor);
                 connection->is_active = false;
-
-                continue;
             }
-
-            Response response = {0};
-            headers_init(&response.headers);
-
-            http_handler(connection->allocator, &connection->request,
-                            &response);
-
-            connection_write(connection->allocator, 
-                                connection->file_descriptor, response);
-
-            // String *connection_header = headers_get(
-            //         &connection->request.headers_map,
-            //         string_lit("connection"));
-            //
-            // if (connection_header != NULL) {
-            //     if (string_eq(*connection_header, string_lit("Keep-Alive"))) {
-            //         allocator_reset(connection->allocator);
-            //         connection->is_active = true;
-            //         continue;
-            //     }
-            // } 
-
-
-            epoll_events_remove_file_descriptor(epoll_file_descriptor,
-                                                connection->file_descriptor);
-            connection->is_active = false;
-
-            printf("Conexion cerrada porque ya se envio la respuesta\n");
         }
     }
 
