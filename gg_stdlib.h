@@ -33,7 +33,7 @@ typedef double f64;
 #define DEFAULT_ALIGNMENT (2*sizeof(void *))
 
 typedef struct Allocator Allocator;
-typedef struct AllocatorTemp AllocatorTemp;
+typedef struct Allocator_Temp Allocator_Temp;
 
 struct Allocator {
     u8  *data;
@@ -41,7 +41,7 @@ struct Allocator {
     u64 capacity;
 };
 
-struct AllocatorTemp {
+struct Allocator_Temp {
     Allocator *allocator;
     u32       position;
 };
@@ -51,12 +51,12 @@ __thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
 Allocator *allocator_make(u64 capacity);
 void      *allocator_alloc(Allocator *allocator, u64 size);
 void      *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align);
-void      allocator_reset(Allocator *allocator);
+void       allocator_reset(Allocator *allocator);
 
-AllocatorTemp allocator_temp_begin(Allocator *allocator);
-void          allocator_temp_end(AllocatorTemp allocatorTemp);
+Allocator_Temp allocator_temp_begin(Allocator *allocator);
+void           allocator_temp_end(Allocator_Temp allocator_temp);
 
-AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count);
+Allocator_Temp get_scratch(Allocator **conflicts, u64 conflict_count);
 #define       release_scratch(t) allocator_temp_end(t)
 
 Allocator *allocator_make(u64 capacity) {
@@ -110,19 +110,19 @@ void allocator_reset(Allocator *allocator) {
     allocator->size = 0;
 }
 
-AllocatorTemp allocator_temp_begin(Allocator *allocator) {
-    AllocatorTemp allocatorTemp = {
+Allocator_Temp allocator_temp_begin(Allocator *allocator) {
+    Allocator_Temp allocator_temp = {
         .allocator = allocator,
         .position = allocator->size,
     };
-    return allocatorTemp;
+    return allocator_temp;
 }
 
-void allocator_temp_end(AllocatorTemp allocatorTemp) {
-    allocatorTemp.allocator->size = allocatorTemp.position;
+void allocator_temp_end(Allocator_Temp allocator_temp) {
+    allocator_temp.allocator->size = allocator_temp.position;
 }
 
-AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count) {
+Allocator_Temp get_scratch(Allocator **conflicts, u64 conflict_count) {
     if (thread_local_allocators_pool[0] == 0) {
         for (u32 i = 0; i < MAX_SCRATCH_COUNT; i++) {
             thread_local_allocators_pool[i] = allocator_make(1024 * 1024); 
@@ -149,7 +149,7 @@ AllocatorTemp get_scratch(Allocator **conflicts, u64 conflict_count) {
         }
     }
 
-    return (AllocatorTemp){0};
+    return (Allocator_Temp){0};
 }
 
 
@@ -509,6 +509,16 @@ char char_to_upper(char c) {
     return c;
 }
 
+bool is_letter(char ch) {
+    return (ch >= 'a' && ch <= 'z') ||
+        (ch >= 'A' && ch <= 'Z');
+}
+
+bool is_alphanum(char ch) {
+    return (ch >= '0' && ch <= '9') ||
+           (ch >= 'A' && ch <= 'Z') ||
+           (ch >= 'a' && ch <= 'z');
+}
 
 void sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity) {
     builder->length = 0;

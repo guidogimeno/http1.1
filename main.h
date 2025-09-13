@@ -49,7 +49,9 @@ enum Parser_State {
     PARSER_STATE_PARSING_HEADER_VALUE_END,
     PARSER_STATE_PARSING_HEADERS_END,
 
+    PARSER_STATE_PARSING_BODY_BEGIN,
     PARSER_STATE_PARSING_BODY,
+
     PARSER_STATE_FINISHED,
     PARSER_STATE_FAILED
 };
@@ -63,9 +65,9 @@ struct Parser_Buffer {
 struct Parser {
     Allocator *allocator;
 
-    i32 file_descriptor;
+    Parser_State state;
 
-    u32 bytes_read;
+    i32 bytes_read;
     Parser_Buffer *first_buffer;
     Parser_Buffer *last_buffer;
     Parser_Buffer *current_buffer;
@@ -76,8 +78,8 @@ struct Parser {
     u32 marked_distance;
 
     String header_name;
-
-    Parser_State state;
+    u32 body_size;
+    u32 body_parsed;
 };
 
 struct Header {
@@ -127,6 +129,7 @@ struct Connection {
     struct sockaddr_in address;
 
     bool is_active;
+    bool error_ocurred;
 
     Request request;
 
