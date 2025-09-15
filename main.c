@@ -20,11 +20,12 @@ static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 fi
 
 static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address);
 static bool connection_handle(Connection *connection);
+static void connection_parse_and_handle_requests(Connection *connection, Parser *parser);
 static i32 connection_write(Connection *connection, Response response);
 
 static String encode_response(Allocator *allocator, Response response);
 
-static void parser_init(Parser *parser, Allocator * allocator, i32 file_descriptor);
+static void parser_init(Parser *parser, Allocator * allocator);
 static char parser_get_char(Parser *parser);
 static Parser_Buffer *parser_push_buffer(Parser *parser);
 static u32 parser_parse_request(Parser *parser, Request *request);
@@ -32,9 +33,12 @@ static u32 parser_parse_request(Parser *parser, Request *request);
 static void http_handler(Allocator *allocator, Request *req, Response *res);
 static String http_status_reason(u16 status);
 
+static void request_init(Request *request);
+
 static void response_init(Response *response);
 static void response_set_status(Response *response, u32 status);
 static void response_add_header(Response *response, String key, String value);
+static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length);
 
 static void headers_init(Headers_Map *headers_map);
 static void headers_put(Headers_Map *headers_map, String field_name, String field_value);
@@ -58,39 +62,34 @@ int main(int argc, char *argv[], char *env[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (epoll_events_add_file_descriptor(epoll_file_descriptor, 
-            server_file_descriptor, EPOLLIN|EPOLLET) == -1) {
+    if (epoll_events_add_file_descriptor(epoll_file_descriptor, server_file_descriptor, EPOLLIN) == -1) {
         exit(EXIT_FAILURE);
     }
     
-
     Server server = {0};
     server.file_descriptor = server_file_descriptor;
     server.epoll_file_descriptor = epoll_file_descriptor;
     server.connections_count = MAX_CONNECTIONS;
-    server.connections = allocator_alloc(allocator, 
-                            sizeof(Connection) * server.connections_count);
+    server.connections = allocator_alloc(allocator, sizeof(Connection) * server.connections_count);
 
     struct epoll_event epoll_events[MAX_EPOLL_EVENTS];
 
     while (main_running) {
-        i32 epoll_events_count = epoll_wait(epoll_file_descriptor,
-                                    epoll_events, MAX_EPOLL_EVENTS, -1);
 
-        if (epoll_events_count == -1 && errno != EINTR) {
+        i32 epoll_events_count = epoll_wait(epoll_file_descriptor, epoll_events, MAX_EPOLL_EVENTS, -1);
+        if (epoll_events_count == -1) {
             continue;
         }
 
         for (u32 i = 0; i < epoll_events_count; i++) {
-            i32 event_file_descriptor = epoll_events[i].data.fd;
 
+            i32 event_file_descriptor = epoll_events[i].data.fd;
             if (event_file_descriptor == server.file_descriptor) {
                 server_accept_client(&server);
                 continue;
             }
 
-            Connection *connection = server_find_connection(&server,
-                                        event_file_descriptor);
+            Connection *connection = server_find_connection(&server, event_file_descriptor);
             if (connection == NULL) {
                 printf("error: no se logro encontrar la conexion\n");
                 epoll_events_remove_file_descriptor(epoll_file_descriptor, event_file_descriptor);
@@ -164,8 +163,7 @@ static i32 start_listening(void) {
 
     // address reutilizable, no hace falta esperar al TIME_WAIT
     i32 reuse = 1;
-    if (setsockopt(file_descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, 
-                    sizeof(reuse)) == -1) {
+    if (setsockopt(file_descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == -1) {
         perror("error al realizar setsockopt(SO_REUSEADDR)");
         exit(EXIT_FAILURE);
     }
@@ -177,8 +175,7 @@ static i32 start_listening(void) {
         .sin_addr.s_addr = inet_addr("127.0.0.1"),
     };
     
-    if (bind(file_descriptor, (struct sockaddr *)&server_addr, 
-                sizeof(server_addr)) == -1) {
+    if (bind(file_descriptor, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
         perror("error al realizar el bind");
         exit(EXIT_FAILURE);
     }
@@ -192,8 +189,7 @@ static i32 start_listening(void) {
     String server_host = string(inet_ntoa(server_addr.sin_addr));
     u16 server_port = ntohs(server_addr.sin_port);
 
-    printf("Servidor escuchando en: %.*s:%d\n",
-            string_print(server_host), server_port);
+    printf("Servidor escuchando en: %.*s:%d\n", string_print(server_host), server_port);
 
     return file_descriptor;
 }
@@ -222,7 +218,7 @@ static void server_accept_client(Server *server) {
         return;
     }
 
-    if (epoll_events_add_file_descriptor(server->epoll_file_descriptor, client_fd, EPOLLIN|EPOLLET) == -1) {
+    if (epoll_events_add_file_descriptor(server->epoll_file_descriptor, client_fd, EPOLLIN) == -1) {
         perror("error al agregar client_fd al epoll events");
         close(client_fd);
         return;
@@ -275,85 +271,107 @@ static void connection_init(Connection *connection, i32 file_descriptor, struct 
     }
 
     connection->file_descriptor = file_descriptor;
+    connection->state = CONNECTION_STATE_ACTIVE;
     connection->host = string(inet_ntoa(address.sin_addr));
     connection->port = ntohs(address.sin_port); 
     connection->address = address; 
     connection->is_active = true;
-    connection->error_ocurred = false;
+    connection->keep_alive = false;
     connection->request = (Request){0};
     headers_init(&connection->request.headers_map);
-    parser_init(&connection->parser, connection->allocator, file_descriptor);
+    parser_init(&connection->parser, connection->allocator);
 }
 
 static bool connection_handle(Connection *connection) {
     Parser *parser = &connection->parser;
-    Request *request = &connection->request;
 
     while (true) {
 
         Parser_Buffer *buffer = parser_push_buffer(parser); 
 
-        parser->bytes_read = recv(connection->file_descriptor, buffer->data, buffer->size, 0);
-
-        if (parser->bytes_read == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                return true;
-            }
-            break;
-        }
-
-        if (parser->bytes_read == 0) {
+        parser->bytes_read = read(connection->file_descriptor, buffer->data, buffer->size);
+        if (parser->bytes_read < 0) {
             return true;
         }
 
-        u32 bytes_parsed = 0;
+        connection_parse_and_handle_requests(connection, parser);
 
-        while (bytes_parsed < parser->bytes_read) {
-            
-            bytes_parsed += parser_parse_request(parser, request);
-            
-            if (parser->state == PARSER_STATE_FINISHED) {
-                Response response;
-                response_init(&response);
-
-                http_handler(connection->allocator, request, &response);
-
-                if (connection_write(connection, response) == -1) {
-                    return true;
-                }
-
-                connection_init(connection, connection->file_descriptor, connection->address);
-            }
-
-            if (parser->state == PARSER_STATE_FAILED) {
-                return true;
-            }
-        }
-
-        if (parser->bytes_read < buffer->size) {
+        if (parser->bytes_read < buffer->size || 
+            parser->state == PARSER_STATE_FAILED ||
+            connection->state == CONNECTION_STATE_FAILED) {
             break;
         }
     }
 
-    if (parser->state != PARSER_STATE_FINISHED) {
-        return false;
+    if (!(parser->state == PARSER_STATE_FINISHED || parser->state == PARSER_STATE_STARTED) 
+        || connection->state == CONNECTION_STATE_FAILED) {
+        return true;
     }
 
-    String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
-    if (connection_value != NULL) {
-        if (string_eq(*connection_value, string_lit("Keep-Alive"))) {
-            connection_init(connection, connection->file_descriptor, connection->address);
-            return false;
-        }
+    if (connection->keep_alive) {
+        connection_init(connection, connection->file_descriptor, connection->address);
+        connection->keep_alive = true;
+        return false;
     } 
 
     return true;
 }
 
-static i32 connection_write(Connection *connection, Response response) {
-    String encoded_response = encode_response(connection->allocator, response);
+static void connection_parse_and_handle_requests(Connection *connection, Parser *parser) {
+    Request *request = &connection->request;
 
-    i32 bytes_sent = send(connection->file_descriptor, encoded_response.data, encoded_response.size, 0);
+    u32 bytes_parsed = 0;
+
+    while (bytes_parsed < parser->bytes_read) {
+        
+        bytes_parsed += parser_parse_request(parser, request);
+        
+        if (parser->state == PARSER_STATE_FINISHED) {
+
+            String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
+            if (connection_value == NULL) {
+                connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
+            } else {
+                connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
+            }
+
+            Response response;
+            response_init(&response);
+
+            http_handler(connection->allocator, request, &response);
+
+            if (connection_write(connection, response) == -1) {
+                connection->state = CONNECTION_STATE_FAILED;
+                break;
+            }
+
+            request_init(request);
+        }
+
+        if (parser->state == PARSER_STATE_FAILED) {
+            break;
+        }
+    }
+}
+
+static i32 connection_write(Connection *connection, Response response) {
+    Allocator *allocator = connection->allocator;
+
+    String content_lenght_value = string_from_int(allocator, response.body.length);
+    String connection_value;
+
+    if (connection->keep_alive) {
+        connection_value = string_lit("keep-alive");
+    } else {
+        connection_value = string_lit("close");
+    }
+
+    headers_put(&response.headers, string_lit("Content-Length"), content_lenght_value);
+    headers_put(&response.headers, string_lit("Connection"), connection_value);
+
+    String encoded_response = encode_response(allocator, response);
+
+    i32 bytes_sent = write(connection->file_descriptor, encoded_response.data, encoded_response.size);
 
     if (bytes_sent == -1) {
         return -1;
@@ -438,7 +456,7 @@ static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 fi
     return close(file_descriptor);
 }
 
-static void parser_init(Parser *parser, Allocator * allocator, i32 file_descriptor) {
+static void parser_init(Parser *parser, Allocator * allocator) {
     *parser = (Parser){0};
     parser->allocator = allocator;
     parser->bytes_read = 0;
@@ -840,7 +858,7 @@ static void http_handler(Allocator *allocator, Request *req, Response *res) {
     response_add_header(res, string_lit("hola"), string_lit("mundo"));
     response_set_status(res, 200);
 
-    response_write(allocator, res, (u8 *)body.data, body.size);
+    response_write(res, allocator, (u8 *)body.data, body.size);
 }
 
 static String http_status_reason(u16 status) {
@@ -850,6 +868,11 @@ static String http_status_reason(u16 status) {
         case 400: return string_lit("Bad Request");
         default: return string_lit("Unknown");
     }
+}
+
+static void request_init(Request *request) {
+    *request = (Request){0};
+    headers_init(&request->headers_map);
 }
 
 static void response_init(Response *response) {
@@ -866,9 +889,7 @@ static void response_add_header(Response *response, String key, String value) {
     headers_put(&response->headers, key, value);
 }
 
-static void response_write(Allocator *allocator, Response *response, u8 *content, u32 length) {
-    headers_put(&response->headers, string_lit("content-length"), string_from_int(allocator, length));
-
+static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length) {
     response->body.data = content;
     response->body.length = length;
 }

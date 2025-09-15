@@ -28,6 +28,7 @@ typedef struct Parser_Buffer Parser_Buffer;
 typedef struct Parser Parser;
 
 typedef enum Method Method;
+typedef enum Connection_State Connection_State;
 typedef enum Parse_Error Parse_Error;
 typedef enum Parser_State Parser_State;
 
@@ -120,8 +121,15 @@ struct Response {
     Body body;
 };
 
+enum Connection_State {
+    CONNECTION_STATE_ACTIVE,
+    CONNECTION_STATE_FAILED
+};
+
 struct Connection {
     Allocator *allocator;
+
+    Connection_State state;
 
     i32 file_descriptor;
     String host;
@@ -129,7 +137,7 @@ struct Connection {
     struct sockaddr_in address;
 
     bool is_active;
-    bool error_ocurred;
+    bool keep_alive;
 
     Request request;
 

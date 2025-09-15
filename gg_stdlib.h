@@ -627,7 +627,7 @@ u64 hash_string(String s) {
     return hash;
 }
 
-// hash: fnv1a - TODO: averiguar en QUE es bueno
+// hash: fnv1a
 u64 hash_generic(void *data, size_t size) {
     u64 hash = 14695981039346656037ULL;
     u8 *bytes = (u8 *)data;
