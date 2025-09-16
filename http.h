@@ -7,8 +7,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "gg_stdlib.h"
-
 #define HTTP_VERSION_10 string_lit("HTTP/1.0")
 #define HTTP_VERSION_11 string_lit("HTTP/1.1")
 
@@ -152,4 +150,6 @@ struct Server {
     u32 connections_count;
     Connection *connections;
 };
+
+int http_listen_and_serve(u32 port, char *host);
 
