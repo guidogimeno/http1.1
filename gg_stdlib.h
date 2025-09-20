@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -21,6 +22,24 @@ typedef double f64;
 #define KB 1024
 #define MB 1024 * KB
 #define GB 1024 * MB
+
+
+
+// ###################################
+// ### Utils #########################
+// ###################################
+
+#define panic_with_msg(msg) do { \
+    fprintf(stderr, "panic at %s:%d - %s\n", __FILE__, __LINE__, msg); \
+    exit(EXIT_FAILURE); \
+} while (0);
+
+#define panic() do { \
+    fprintf(stderr, "panic at %s:%d\n", __FILE__, __LINE__); \
+    exit(EXIT_FAILURE); \
+} while (0);
+
+
 
 
 
@@ -49,22 +68,27 @@ struct Allocator_Temp {
 __thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
 
 Allocator *allocator_make(u64 capacity);
-void      *allocator_alloc(Allocator *allocator, u64 size);
-void      *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align);
-void       allocator_reset(Allocator *allocator);
+void *allocator_alloc(Allocator *allocator, u64 size);
+void *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align);
+void allocator_reset(Allocator *allocator);
 
 Allocator_Temp allocator_temp_begin(Allocator *allocator);
-void           allocator_temp_end(Allocator_Temp allocator_temp);
+void allocator_temp_end(Allocator_Temp allocator_temp);
 
 Allocator_Temp get_scratch(Allocator **conflicts, u64 conflict_count);
-#define       release_scratch(t) allocator_temp_end(t)
+#define release_scratch(t) allocator_temp_end(t)
 
 Allocator *allocator_make(u64 capacity) {
-    void *memory = malloc(sizeof(Allocator) + capacity);
+    void *memory = mmap(0, sizeof(Allocator) + capacity, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+    if (memory == (void *)-1) {
+        panic_with_msg("mmap failed");
+    }
+
     Allocator *allocator = (Allocator *)memory;
     allocator->data = memory + sizeof(Allocator);
     allocator->capacity = capacity;
     allocator->size = 0;
+
     return allocator;
 }
 
@@ -637,4 +661,7 @@ u64 hash_generic(void *data, size_t size) {
     }
     return hash;
 }
+
+
+
 

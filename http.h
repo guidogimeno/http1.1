@@ -24,11 +24,16 @@ typedef struct Headers_Map Headers_Map;
 typedef struct Body Body;
 typedef struct Parser_Buffer Parser_Buffer;
 typedef struct Parser Parser;
+typedef struct Handler_Pattern Handler_Pattern;
+typedef struct Pattern_Parser Pattern_Parser;
 
 typedef enum Method Method;
 typedef enum Connection_State Connection_State;
 typedef enum Parse_Error Parse_Error;
 typedef enum Parser_State Parser_State;
+typedef enum Pattern_Parser_State Pattern_Parser_State;
+
+typedef void (Http_Handler)(Request *req, Response *res);
 
 enum Parser_State {
     PARSER_STATE_STARTED,
@@ -142,14 +147,82 @@ struct Connection {
     Parser parser;
 };
 
+enum Pattern_Parser_State {
+    PATTERN_PARSER_STATE_STARTED,
+    PATTERN_PARSER_STATE_PARSING_URI,
+    PATTERN_PARSER_STATE_FAILED,
+    PATTERN_PARSER_STATE_FINISHED
+};
+
+struct Pattern_Parser {
+    Pattern_Parser_State state;
+
+    Method method;
+    String pattern;
+};
+
+struct Handler_Pattern {
+    Handler_Pattern *next;
+
+    Method method;
+    String pattern;
+
+    Http_Handler *handler;
+};
+
 struct Server {
+    Allocator *allocator;
+
     i32 file_descriptor;
 
     i32 epoll_file_descriptor;
 
     u32 connections_count;
     Connection *connections;
+
+    Handler_Pattern *first_handler_pattern;
+    Handler_Pattern *last_handler_pattern;
 };
 
-int http_listen_and_serve(u32 port, char *host);
+Server *http_server_make(Allocator *allocator);
+void http_server_handle(Server *server, char *pattern, Http_Handler *handler);
+i32 http_server_start(Server *server, u32 port, char *host);
+
+static i32 signals_init(void);
+static void signal_handler(i32 signal_number);
+static i32 start_listening(u32 port, char *host);
+static i32 set_nonblocking(i32 file_descriptor);
+
+static void server_accept_client(Server *server);
+static Connection *server_find_connection(Server *server, i32 file_descriptor);
+static Connection *server_find_free_connection(Server *server);
+static bool server_handle_connection(Server *server, Connection *connection);
+
+static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events);
+static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 file_descriptor);
+
+static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address);
+static i32 connection_write(Connection *connection, Response response);
+
+static String encode_response(Allocator *allocator, Response response);
+
+static void parser_init(Parser *parser, Allocator * allocator);
+static char parser_get_char(Parser *parser);
+static Parser_Buffer *parser_push_buffer(Parser *parser);
+static u32 parser_parse_request(Parser *parser, Request *request);
+
+static void pattern_parser_parse(Pattern_Parser *pattern_parser, String pattern_str);
+
+static String http_status_reason(u16 status);
+
+static void request_init(Request *request);
+
+static void response_init(Response *response);
+static void response_set_status(Response *response, u32 status);
+static void response_add_header(Response *response, String key, String value);
+static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length);
+
+static void headers_init(Headers_Map *headers_map);
+static void headers_put(Headers_Map *headers_map, String field_name, String field_value);
+static String *headers_get(Headers_Map *headers_map, String field_name);
 

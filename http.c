@@ -1,53 +1,149 @@
 static volatile bool main_running = true;
 
-static i32 signals_init(void);
-static void signal_handler(i32 signal_number);
+Server *http_server_make(Allocator *allocator) {
+    Server *server = allocator_alloc(allocator, sizeof(Server));
 
-static i32 start_listening(u32 port, char *host);
+    *server = (Server){0};
+    server->allocator = allocator;
 
-static void server_accept_client(Server *server);
-static i32 set_nonblocking(i32 file_descriptor);
+    return server;
+}
 
-static Connection *server_find_connection(Server *server, i32 file_descriptor);
-static Connection *server_find_free_connection(Server *server);
+void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
+    if (pattern == NULL || handler == NULL) {
+        panic_with_msg("http_server_handle args {pattern} and {handler} cannot be null" );
+    }
 
-static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events);
-static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 file_descriptor);
+    String pattern_str = string(pattern);
+    if (pattern_str.size == 0) {
+        panic_with_msg("http_server_handle arg {pattern} cannot be empty" );
+    }
 
-static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address);
-static bool connection_handle(Connection *connection);
-static void connection_parse_and_handle_requests(Connection *connection, Parser *parser);
-static i32 connection_write(Connection *connection, Response response);
+    Pattern_Parser parser = {0}; 
+    pattern_parser_parse(&parser, pattern_str);
 
-static String encode_response(Allocator *allocator, Response response);
+    // / texto / { texto } /
+    // /foo/1234/baz
+    // /foo/*/baz
+    // /foo/*/baz/bar
+    //
+    // leo: foo
+    // hash table?
+    // arbol? <- no es mala eh
+    //
+    // como se armaria?
+    //
+    //          foo
+    //         /   \
+    //        bar   *  se? si
+    //
+    //          foo
+    //         /   
+    //      {bar}   
+    //      /   \
+    //   {baz} End con mirar si tienen handler puedo saber si son un leaf
+    //
+    //   primero armo el arbol
+    //
+    //   para usarlo comparo directo la URL pelada
+    //
+    //   pero en que momento los registro en el Request para facil acceso?
+    //
+    //   mientras busco voy guardando posiciones de los {} a medida que matchean?
+    //   hago ambos
 
-static void parser_init(Parser *parser, Allocator * allocator);
-static char parser_get_char(Parser *parser);
-static Parser_Buffer *parser_push_buffer(Parser *parser);
-static u32 parser_parse_request(Parser *parser, Request *request);
+    if (parser.state == PATTERN_PARSER_STATE_FAILED || parser.state != PATTERN_PARSER_STATE_FINISHED) {
+        panic_with_msg("http_server_handle failed to parse pattern" );
+    }
 
-static void http_handler(Allocator *allocator, Request *req, Response *res);
-static String http_status_reason(u16 status);
+    Handler_Pattern *handler_pattern = allocator_alloc(server->allocator, sizeof(Handler_Pattern));
+    handler_pattern->method = parser.method;
+    handler_pattern->pattern = parser.pattern;
+    handler_pattern->handler = handler;
+    handler_pattern->next = NULL;
 
-static void request_init(Request *request);
+    if (server->first_handler_pattern == NULL && server->last_handler_pattern == NULL) {
+        server->first_handler_pattern = handler_pattern;
+    } else {
+        server->last_handler_pattern->next = handler_pattern;
+    }
+    server->last_handler_pattern = handler_pattern;
+}
 
-static void response_init(Response *response);
-static void response_set_status(Response *response, u32 status);
-static void response_add_header(Response *response, String key, String value);
-static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length);
+static void pattern_parser_parse(Pattern_Parser *pattern_parser, String pattern_str) {
+ 
+    pattern_parser->state = PATTERN_PARSER_STATE_STARTED;
+    // u32 slash_pos = 0;
 
-static void headers_init(Headers_Map *headers_map);
-static void headers_put(Headers_Map *headers_map, String field_name, String field_value);
-static String *headers_get(Headers_Map *headers_map, String field_name);
+    for (u32 i = 0; i < pattern_str.size; i++) {
 
+        char c = pattern_str.data[i];
 
-int http_listen_and_serve(u32 port, char *host) {
+        switch (pattern_parser->state) {
+
+            case PATTERN_PARSER_STATE_STARTED: {
+
+                if (is_letter(c)) {
+                    break;
+                }
+
+                if (c != ' ') {
+                    pattern_parser->state = PATTERN_PARSER_STATE_FAILED;
+                    break;
+                }
+
+                String method = string_with_len(pattern_str.data, i);
+
+                if (string_eq(method, string_lit("GET"))) {
+                    pattern_parser->method = METHOD_GET;
+                } else if (string_eq(method, string_lit("PUT"))) {
+                    pattern_parser->method = METHOD_PUT;
+                } else if (string_eq(method, string_lit("POST"))) {
+                    pattern_parser->method = METHOD_POST;
+                } else if (string_eq(method, string_lit("DELETE"))) {
+                    pattern_parser->method = METHOD_DELETE;
+                } else {
+                    pattern_parser->state = PATTERN_PARSER_STATE_FAILED;
+                    break;
+                }
+
+                pattern_parser->state = PATTERN_PARSER_STATE_PARSING_URI;
+
+                break;
+            }
+
+            case PATTERN_PARSER_STATE_PARSING_URI: {
+
+                // if (c != '/') {
+                //     pattern_parser->state = PATTERN_PARSER_STATE_PARSING_URI;
+                //     break;
+                // }
+                //
+                // slash_pos = i;
+                //
+                //
+
+                u32 size = pattern_str.size - i;
+                pattern_parser->pattern = string_with_len(pattern_str.data + i, size);
+
+                pattern_parser->state = PATTERN_PARSER_STATE_FINISHED;
+
+                break;
+            }
+
+            case PATTERN_PARSER_STATE_FINISHED:
+            case PATTERN_PARSER_STATE_FAILED: {
+                return;
+            }
+        }
+    }
+}
+
+i32 http_server_start(Server *server, u32 port, char *host) {
     if (signals_init() == -1) {
         perror("error al iniciar las signals");
         return EXIT_FAILURE;
     }
-
-    Allocator *allocator = allocator_make(1 * GB);
 
     i32 server_file_descriptor = start_listening(port, host);    
 
@@ -60,11 +156,10 @@ int http_listen_and_serve(u32 port, char *host) {
         return EXIT_FAILURE;
     }
     
-    Server server = {0};
-    server.file_descriptor = server_file_descriptor;
-    server.epoll_file_descriptor = epoll_file_descriptor;
-    server.connections_count = MAX_CONNECTIONS;
-    server.connections = allocator_alloc(allocator, sizeof(Connection) * server.connections_count);
+    server->file_descriptor = server_file_descriptor;
+    server->epoll_file_descriptor = epoll_file_descriptor;
+    server->connections_count = MAX_CONNECTIONS;
+    server->connections = allocator_alloc(server->allocator, sizeof(Connection) * server->connections_count);
 
     struct epoll_event epoll_events[MAX_EPOLL_EVENTS];
 
@@ -78,19 +173,19 @@ int http_listen_and_serve(u32 port, char *host) {
         for (u32 i = 0; i < epoll_events_count; i++) {
 
             i32 event_file_descriptor = epoll_events[i].data.fd;
-            if (event_file_descriptor == server.file_descriptor) {
-                server_accept_client(&server);
+            if (event_file_descriptor == server->file_descriptor) {
+                server_accept_client(server);
                 continue;
             }
 
-            Connection *connection = server_find_connection(&server, event_file_descriptor);
+            Connection *connection = server_find_connection(server, event_file_descriptor);
             if (connection == NULL) {
                 printf("error: no se logro encontrar la conexion\n");
                 epoll_events_remove_file_descriptor(epoll_file_descriptor, event_file_descriptor);
                 continue;
             }
 
-            bool remove_connection = connection_handle(connection);
+            bool remove_connection = server_handle_connection(server, connection);
             if (remove_connection) {
                 epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor);
                 connection->is_active = false;
@@ -98,8 +193,8 @@ int http_listen_and_serve(u32 port, char *host) {
         }
     }
 
-    close(server.epoll_file_descriptor);
-    close(server.file_descriptor);
+    close(server->epoll_file_descriptor);
+    close(server->file_descriptor);
 
     return EXIT_SUCCESS;
 }
@@ -170,6 +265,19 @@ static i32 start_listening(u32 port, char *host) {
     return file_descriptor;
 }
 
+static i32 set_nonblocking(i32 file_descriptor) {
+    i32 flags = fcntl(file_descriptor, F_GETFL);
+    if (flags == -1) {
+        return -1;
+    }
+
+    if (fcntl(file_descriptor, F_SETFL, flags | O_NONBLOCK) == -1) {
+        return -1;
+    }
+
+    return 0;
+}
+
 static void server_accept_client(Server *server) {
 
     struct sockaddr_in client_addr;
@@ -206,18 +314,6 @@ static void server_accept_client(Server *server) {
             connection->port);
 }
 
-static i32 set_nonblocking(i32 file_descriptor) {
-    i32 flags = fcntl(file_descriptor, F_GETFL);
-    if (flags == -1) {
-        return -1;
-    }
-
-    if (fcntl(file_descriptor, F_SETFL, flags | O_NONBLOCK) == -1) {
-        return -1;
-    }
-
-    return 0;
-}
 
 static Connection *server_find_connection(Server *server, i32 file_descriptor) {
     for (u32 i = 0; i < server->connections_count; i++) {
@@ -258,8 +354,9 @@ static void connection_init(Connection *connection, i32 file_descriptor, struct 
     parser_init(&connection->parser, connection->allocator);
 }
 
-static bool connection_handle(Connection *connection) {
+static bool server_handle_connection(Server *server, Connection *connection) {
     Parser *parser = &connection->parser;
+    Request *request = &connection->request;
 
     while (true) {
 
@@ -270,7 +367,61 @@ static bool connection_handle(Connection *connection) {
             return true;
         }
 
-        connection_parse_and_handle_requests(connection, parser);
+        u32 bytes_parsed = 0;
+
+        while (bytes_parsed < parser->bytes_read) {
+            
+            bytes_parsed += parser_parse_request(parser, request);
+            
+            if (parser->state == PARSER_STATE_FINISHED) {
+
+                Http_Handler *handler = NULL;
+
+                Handler_Pattern *handler_pattern;
+                for (handler_pattern = server->first_handler_pattern;
+                     handler_pattern != NULL;
+                     handler_pattern = handler_pattern->next) {
+
+                    printf("DEBUG: handler_pattern->method=%d request->method=%d\n", handler_pattern->method, request->method);
+                    printf("DEBUG: handler_pattern->pattern=%.*s request->uri=%.*s\n", string_print(handler_pattern->pattern), string_print(request->uri));
+                    bool same_method = handler_pattern->method == request->method;
+                    bool same_uri = string_eq(handler_pattern->pattern, request->uri);
+
+                    if (same_method && same_uri) {
+                        handler = handler_pattern->handler;
+                        break;
+                    }
+                }
+
+                if (handler) {
+
+                    String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
+                    if (connection_value == NULL) {
+                        connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
+                    } else {
+                        connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
+                    }
+
+                    Response response;
+                    response_init(&response);
+
+                    handler(request, &response);
+
+                    if (connection_write(connection, response) == -1) {
+                        connection->state = CONNECTION_STATE_FAILED;
+                        break;
+                    }
+
+                    request_init(request);
+                } else {
+                    // TODO: responder un 404 o algo
+                }
+            }
+
+            if (parser->state == PARSER_STATE_FAILED) {
+                break;
+            }
+        }
 
         if (parser->bytes_read < buffer->size || 
             parser->state == PARSER_STATE_FAILED ||
@@ -279,8 +430,9 @@ static bool connection_handle(Connection *connection) {
         }
     }
 
-    if (!(parser->state == PARSER_STATE_FINISHED || parser->state == PARSER_STATE_STARTED) 
-        || connection->state == CONNECTION_STATE_FAILED) {
+    if (!(parser->state == PARSER_STATE_FINISHED || 
+                parser->state == PARSER_STATE_STARTED) || 
+        connection->state == CONNECTION_STATE_FAILED) {
         return true;
     }
 
@@ -291,43 +443,6 @@ static bool connection_handle(Connection *connection) {
     } 
 
     return true;
-}
-
-static void connection_parse_and_handle_requests(Connection *connection, Parser *parser) {
-    Request *request = &connection->request;
-
-    u32 bytes_parsed = 0;
-
-    while (bytes_parsed < parser->bytes_read) {
-        
-        bytes_parsed += parser_parse_request(parser, request);
-        
-        if (parser->state == PARSER_STATE_FINISHED) {
-
-            String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
-            if (connection_value == NULL) {
-                connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
-            } else {
-                connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
-            }
-
-            Response response;
-            response_init(&response);
-
-            http_handler(connection->allocator, request, &response);
-
-            if (connection_write(connection, response) == -1) {
-                connection->state = CONNECTION_STATE_FAILED;
-                break;
-            }
-
-            request_init(request);
-        }
-
-        if (parser->state == PARSER_STATE_FAILED) {
-            break;
-        }
-    }
 }
 
 static i32 connection_write(Connection *connection, Response response) {
@@ -828,15 +943,6 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
     return parser->at - parser_start_position;
 }
 
-static void http_handler(Allocator *allocator, Request *req, Response *res) {
-    String body = string("{ \"foo\": \"bar\" }");
-
-    response_add_header(res, string_lit("hola"), string_lit("mundo"));
-    response_set_status(res, 200);
-
-    response_write(res, allocator, (u8 *)body.data, body.size);
-}
-
 static String http_status_reason(u16 status) {
     switch (status) {
         case 200: return string_lit("Ok");
@@ -853,7 +959,7 @@ static void request_init(Request *request) {
 
 static void response_init(Response *response) {
     *response = (Response){0};
-    response->status = 500;
+    response->status = 200;
     headers_init(&response->headers);
 }
 
