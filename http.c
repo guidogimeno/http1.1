@@ -9,6 +9,71 @@ Server *http_server_make(Allocator *allocator) {
     return server;
 }
 
+static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment) {
+
+    Pattern_Segment *server_segment = NULL;
+
+    for (server_segment = *tree;
+         server_segment != NULL;
+         server_segment = server_segment->next_segment) {
+
+        if (string_eq(server_segment->segment, segment->segment)) {
+            break;
+        }
+
+    }
+
+    if (server_segment) {
+
+        if (segment->child_segments) {
+
+            if (server_segment->child_segments) {
+                segments_tree_add(&server_segment->child_segments, segment->child_segments);
+            } else {
+                server_segment->child_segments = segment->child_segments;
+            }
+
+        } else {
+
+            if (server_segment->handler) {
+                panic_with_msg("http_server_handle failed due tu duplicated paths");
+            } else {
+                server_segment->handler = segment->handler;
+            }
+
+        }
+        
+    } else {
+
+        if (*tree == NULL) {
+            *tree = segment;
+        } else {
+            (*tree)->last_segment->next_segment = segment;
+            (*tree)->last_segment = segment;
+        }
+    
+    }
+}
+
+void print_segments(Pattern_Segment *s, u32 nivel) {
+
+    for (Pattern_Segment *segment = s;
+         segment != NULL;
+         segment = segment->next_segment) {
+
+        printf("%.*s \n", string_print(segment->segment));
+
+        if (segment->child_segments) {
+            
+            printf("empieza padre: %.*s nivel: %d \n", string_print(segment->segment), nivel + 1);
+            print_segments(segment->child_segments, nivel + 1);
+            printf("termina padre: %.*s nivel: %d \n", string_print(segment->segment), nivel + 1);
+
+        }
+
+    }
+}
+
 void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
     if (pattern == NULL || handler == NULL) {
         panic_with_msg("http_server_handle args {pattern} and {handler} cannot be null" );
@@ -20,60 +85,27 @@ void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
     }
 
     Pattern_Parser parser = {0}; 
-    pattern_parser_parse(&parser, pattern_str);
-
-    // / texto / { texto } /
-    // /foo/1234/baz
-    // /foo/*/baz
-    // /foo/*/baz/bar
-    //
-    // leo: foo
-    // hash table?
-    // arbol? <- no es mala eh
-    //
-    // como se armaria?
-    //
-    //          foo
-    //         /   \
-    //        bar   *  se? si
-    //
-    //          foo
-    //         /   
-    //      {bar}   
-    //      /   \
-    //   {baz} End con mirar si tienen handler puedo saber si son un leaf
-    //
-    //   primero armo el arbol
-    //
-    //   para usarlo comparo directo la URL pelada
-    //
-    //   pero en que momento los registro en el Request para facil acceso?
-    //
-    //   mientras busco voy guardando posiciones de los {} a medida que matchean?
-    //   hago ambos
+    pattern_parser_parse(&parser, server->allocator, pattern_str);
 
     if (parser.state == PATTERN_PARSER_STATE_FAILED || parser.state != PATTERN_PARSER_STATE_FINISHED) {
         panic_with_msg("http_server_handle failed to parse pattern" );
     }
 
-    Handler_Pattern *handler_pattern = allocator_alloc(server->allocator, sizeof(Handler_Pattern));
-    handler_pattern->method = parser.method;
-    handler_pattern->pattern = parser.pattern;
-    handler_pattern->handler = handler;
-    handler_pattern->next = NULL;
+    parser.last_segment->handler = handler;
 
-    if (server->first_handler_pattern == NULL && server->last_handler_pattern == NULL) {
-        server->first_handler_pattern = handler_pattern;
-    } else {
-        server->last_handler_pattern->next = handler_pattern;
-    }
-    server->last_handler_pattern = handler_pattern;
+    segments_tree_add(&server->segments_tree, parser.first_segment);
+
+    // TODO: Borrar logs
+    print_segments(server->segments_tree, 0);
+    printf("\n");
 }
 
-static void pattern_parser_parse(Pattern_Parser *pattern_parser, String pattern_str) {
+static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allocator, String pattern_str) {
  
     pattern_parser->state = PATTERN_PARSER_STATE_STARTED;
-    // u32 slash_pos = 0;
+
+    u32 slash_pos = 0;
+    u32 open_brace_pos = 0;
 
     for (u32 i = 0; i < pattern_str.size; i++) {
 
@@ -107,36 +139,110 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, String pattern_
                     break;
                 }
 
-                pattern_parser->state = PATTERN_PARSER_STATE_PARSING_URI;
+                pattern_parser->state = PATTERN_PARSER_STATE_PARSING_SLASH;
 
                 break;
             }
 
-            case PATTERN_PARSER_STATE_PARSING_URI: {
+            case PATTERN_PARSER_STATE_PARSING_SLASH: {
 
-                // if (c != '/') {
-                //     pattern_parser->state = PATTERN_PARSER_STATE_PARSING_URI;
-                //     break;
-                // }
-                //
-                // slash_pos = i;
-                //
-                //
+                if (c != '/') {
+                    pattern_parser->state = PATTERN_PARSER_STATE_FAILED;
+                    break;
+                }
 
-                u32 size = pattern_str.size - i;
-                pattern_parser->pattern = string_with_len(pattern_str.data + i, size);
+                slash_pos = i;
 
-                pattern_parser->state = PATTERN_PARSER_STATE_FINISHED;
+                pattern_parser->state = PATTERN_PARSER_STATE_PARSING_PATH_SEGMENT;
+
+                break;
+            }
+
+            case PATTERN_PARSER_STATE_PARSING_PATH_SEGMENT: {
+
+                if (is_alphanum(c)) {
+                    break;
+                }
+
+                if (c == '{') {
+                    open_brace_pos = i;
+                    pattern_parser->state = PATTERN_PARSER_STATE_PARSING_PATH_PARAM;
+                    break;
+                }
+
+                if (c != '/') {
+                    pattern_parser->state = PATTERN_PARSER_STATE_FAILED;
+                    break;
+                }
+
+                String segment = string_with_len(pattern_str.data + slash_pos, i - slash_pos);
+                pattern_parser_add_segment(pattern_parser, allocator, segment, false);
+
+                slash_pos = i;
+
+                pattern_parser->state = PATTERN_PARSER_STATE_PARSING_PATH_SEGMENT;
+                
+                break;
+            }
+
+            case PATTERN_PARSER_STATE_PARSING_PATH_PARAM: {
+
+                if (is_letter(c)) {
+                    break;
+                }
+
+                if (c != '}') {
+                    pattern_parser->state = PATTERN_PARSER_STATE_FAILED;
+                    break;
+                }
+
+                String segment = string_with_len(pattern_str.data + open_brace_pos + 1, i - open_brace_pos - 1);
+                pattern_parser_add_segment(pattern_parser, allocator, segment, true);
+
+                if (i == pattern_str.size -1) {
+                    pattern_parser->state = PATTERN_PARSER_STATE_FINISHED;
+                } else {
+                    pattern_parser->state = PATTERN_PARSER_STATE_PARSING_SLASH;
+                }
 
                 break;
             }
 
             case PATTERN_PARSER_STATE_FINISHED:
             case PATTERN_PARSER_STATE_FAILED: {
+                pattern_parser->method = METHOD_GET;
                 return;
             }
         }
     }
+
+    if (pattern_parser->state == PATTERN_PARSER_STATE_PARSING_PATH_SEGMENT ||
+        pattern_parser->state == PATTERN_PARSER_STATE_PARSING_SLASH) {
+
+        String segment = string_with_len(pattern_str.data + slash_pos, pattern_str.size - slash_pos);
+        pattern_parser_add_segment(pattern_parser, allocator, segment, false);
+
+        pattern_parser->state = PATTERN_PARSER_STATE_FINISHED;
+    }
+}
+
+void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param) {
+    Pattern_Segment *pattern_segment = allocator_alloc(allocator, sizeof(Pattern_Segment));
+    pattern_segment->segment = segment;
+    pattern_segment->is_path_param = is_path_param;
+    pattern_segment->handler = NULL;
+    pattern_segment->next_segment = NULL;
+    pattern_segment->first_segment = pattern_segment;
+    pattern_segment->last_segment = pattern_segment;
+    pattern_segment->child_segments = NULL;
+
+    if (parser->first_segment == NULL && parser->last_segment == NULL) {
+        parser->first_segment = pattern_segment;
+    } else {
+        parser->last_segment->child_segments = pattern_segment;
+    }
+
+    parser->last_segment = pattern_segment;
 }
 
 i32 http_server_start(Server *server, u32 port, char *host) {
@@ -375,47 +481,77 @@ static bool server_handle_connection(Server *server, Connection *connection) {
             
             if (parser->state == PARSER_STATE_FINISHED) {
 
+                // a - b - c - d
+                // a -> b -> j
+                //        -> c -> d
+                //   -> d -> h
+
+                // TODO: Comprar trees
                 Http_Handler *handler = NULL;
+                Pattern_Segment *server_segment = NULL;
+                Pattern_Segment *request_segment = request->segments_tree;
 
-                Handler_Pattern *handler_pattern;
-                for (handler_pattern = server->first_handler_pattern;
-                     handler_pattern != NULL;
-                     handler_pattern = handler_pattern->next) {
+                for (server_segment = server->segments_tree;
+                     server_segment != NULL;
+                     server_segment = server_segment->next_segment) {
 
-                    printf("DEBUG: handler_pattern->method=%d request->method=%d\n", handler_pattern->method, request->method);
-                    printf("DEBUG: handler_pattern->pattern=%.*s request->uri=%.*s\n", string_print(handler_pattern->pattern), string_print(request->uri));
-                    bool same_method = handler_pattern->method == request->method;
-                    bool same_uri = string_eq(handler_pattern->pattern, request->uri);
+                    if (string_eq(server_segment->segment, request_segment->segment)) {
+                        request_segment = request_segment->child_segments;
+                        server_segment = server_segment->child_segments;
+                    }
 
-                    if (same_method && same_uri) {
-                        handler = handler_pattern->handler;
-                        break;
+                    for (Pattern_Segment *segment = request->segments_tree;
+                         segment != NULL;
+                         segment = segment->child_segments) {
+
+                        if (string_eq(s->segment, segment->segment)) {
+                            found = true;
+                            server_segment = s->child_segments;
+                            break;
+                        }
                     }
                 }
-
-                if (handler) {
-
-                    String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
-                    if (connection_value == NULL) {
-                        connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
-                    } else {
-                        connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
-                    }
-
+                
+                //
+                // Handler_Pattern *handler_pattern;
+                // for (handler_pattern = server->first_handler_pattern;
+                //      handler_pattern != NULL;
+                //      handler_pattern = handler_pattern->next) {
+                //
+                //     printf("DEBUG: handler_pattern->method=%d request->method=%d\n", handler_pattern->method, request->method);
+                //     printf("DEBUG: handler_pattern->pattern=%.*s request->uri=%.*s\n", string_print(handler_pattern->pattern), string_print(request->uri));
+                //     bool same_method = handler_pattern->method == request->method;
+                //     bool same_uri = string_eq(handler_pattern->pattern, request->uri);
+                //
+                //     if (same_method && same_uri) {
+                //         handler = handler_pattern->handler;
+                //         break;
+                //     }
+                // }
+                //
+                // if (handler) {
+                //
+                //     String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
+                //     if (connection_value == NULL) {
+                //         connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
+                //     } else {
+                //         connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
+                //     }
+                //
                     Response response;
                     response_init(&response);
-
-                    handler(request, &response);
-
+                //
+                //     handler(request, &response);
+                //
                     if (connection_write(connection, response) == -1) {
                         connection->state = CONNECTION_STATE_FAILED;
                         break;
                     }
-
-                    request_init(request);
-                } else {
-                    // TODO: responder un 404 o algo
-                }
+                //
+                    request_init(request); 
+                // } else {
+                //     // TODO: responder un 404 o algo
+                // }
             }
 
             if (parser->state == PARSER_STATE_FAILED) {
@@ -641,6 +777,7 @@ static Parser_Buffer *parser_push_buffer(Parser *parser) {
         parser->last_buffer = new_buffer;
     }
 
+    // TODO: Esto no deberia estar en un else??? 
     parser->last_buffer->next = new_buffer;
     parser->last_buffer = new_buffer;
 
@@ -663,6 +800,8 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
                 break;
 
+            // TODO: dividir en 2, no me va a funcionar sino porque lo reutilizo para
+            // la URI de entrada que viene sin metodo.
             case PARSER_STATE_PARSING_METHOD:
 
                 if (is_letter(c)) {
@@ -712,8 +851,19 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                 }
 
                 String uri = parser_extract_block(parser, parser->at - 1);
-                
+
+                Pattern_Parser pattern_parser = {0}; 
+                pattern_parser_parse(&pattern_parser, parser->allocator, uri);
+
+                if (pattern_parser.state == PATTERN_PARSER_STATE_FAILED ||
+                    pattern_parser.state != PATTERN_PARSER_STATE_FINISHED) {
+
+                    parser->state = PARSER_STATE_FAILED;
+                    break;
+                }
+
                 request->uri = uri;
+                request->segments_tree = pattern_parser->first_segment;
 
                 parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_VERSION;
 

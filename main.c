@@ -53,7 +53,40 @@ int main(int argc, char *argv[], char *env[]) {
 
     Server *server = http_server_make(allocator);
 
+    printf("caso 0: \n");
+    http_server_handle(server, "GET /", &foo_handler_1);
+    
+    printf("caso 1: \n");
     http_server_handle(server, "GET /foo", &foo_handler_1);
+    
+    printf("caso 2: \n");
+    http_server_handle(server, "GET /{bar}", &foo_handler_1);
+
+    printf("caso 3: \n");
+    http_server_handle(server, "GET /foo/", &foo_handler_1);
+
+    printf("caso 4: \n");
+    http_server_handle(server, "GET /{bar}/", &foo_handler_1);
+
+    printf("caso 5: \n");
+    http_server_handle(server, "GET /foo/{bar}", &foo_handler_2);
+
+    printf("caso 6: \n");
+    http_server_handle(server, "GET /{bar}/baz", &foo_handler_2);
+
+    printf("caso 7: \n");
+    http_server_handle(server, "GET /{bar}/{baz}", &foo_handler_2);
+
+    printf("caso 8: \n");
+    http_server_handle(server, "GET /foo/bar/baz/", &foo_handler_2);
+
+    printf("caso 9: \n");
+    http_server_handle(server, "GET /{foo}/bar/{baz}/", &foo_handler_2);
+
+    printf("caso 10: \n");
+    http_server_handle(server, "GET /{foo}/{bar}/{baz}/", &foo_handler_2);
+
+    printf("caso 11: \n");
     http_server_handle(server, "GET /foo/{bar}/baz", &foo_handler_2);
 
     return http_server_start(server, 8080, "127.0.0.1");
