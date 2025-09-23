@@ -24,9 +24,9 @@ typedef struct Headers_Map Headers_Map;
 typedef struct Body Body;
 typedef struct Parser_Buffer Parser_Buffer;
 typedef struct Parser Parser;
-typedef struct Handler_Pattern Handler_Pattern;
 typedef struct Pattern_Parser Pattern_Parser;
 typedef struct Pattern_Segment Pattern_Segment;
+typedef struct Segment_Literal Segment_Literal;
 
 typedef enum Method Method;
 typedef enum Connection_State Connection_State;
@@ -70,15 +70,6 @@ enum Pattern_Parser_State {
     PATTERN_PARSER_STATE_FINISHED
 };
 
-struct Pattern_Parser {
-    Pattern_Parser_State state;
-
-    Method method;
-
-    Pattern_Segment *first_segment;
-    Pattern_Segment *last_segment;
-};
-
 struct Pattern_Segment {
     Pattern_Segment *next_segment;
     Pattern_Segment *first_segment;
@@ -91,6 +82,14 @@ struct Pattern_Segment {
     Http_Handler *handler;
 };
 
+struct Pattern_Parser {
+    Pattern_Parser_State state;
+
+    String method;
+
+    Pattern_Segment *first_segment;
+    Pattern_Segment *last_segment;
+};
 
 struct Parser_Buffer {
     Parser_Buffer *next;
@@ -142,10 +141,16 @@ struct Body {
     u32 length;
 };
 
+struct Segment_Literal {
+    Segment_Literal *next_segment;
+    String segment;
+};
+
 struct Request {
-    Method method;
+    String method;
     String uri;
-    Pattern_Segment *segments_tree;
+    Segment_Literal *first_segment;
+    Segment_Literal *last_segment;
     String version;
     Headers_Map headers_map;
     Body body;
@@ -208,6 +213,7 @@ static Connection *server_find_free_connection(Server *server);
 static bool server_handle_connection(Server *server, Connection *connection);
 
 static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment);
+static Http_Handler *find_handler(Pattern_Segment *pattern_segment, Segment_Literal *segment_literal);
 
 static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events);
 static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 file_descriptor);
@@ -223,11 +229,12 @@ static Parser_Buffer *parser_push_buffer(Parser *parser);
 static u32 parser_parse_request(Parser *parser, Request *request);
 
 static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allocator, String pattern_str);
-void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param);
+static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param);
 
 static String http_status_reason(u16 status);
 
 static void request_init(Request *request);
+static void request_add_segment_literal(Request *request, Allocator *allocator, String literal);
 
 static void response_init(Response *response);
 static void response_set_status(Response *response, u32 status);

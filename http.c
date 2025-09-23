@@ -126,20 +126,20 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
 
                 String method = string_with_len(pattern_str.data, i);
 
-                if (string_eq(method, string_lit("GET"))) {
-                    pattern_parser->method = METHOD_GET;
-                } else if (string_eq(method, string_lit("PUT"))) {
-                    pattern_parser->method = METHOD_PUT;
-                } else if (string_eq(method, string_lit("POST"))) {
-                    pattern_parser->method = METHOD_POST;
-                } else if (string_eq(method, string_lit("DELETE"))) {
-                    pattern_parser->method = METHOD_DELETE;
-                } else {
-                    pattern_parser->state = PATTERN_PARSER_STATE_FAILED;
-                    break;
-                }
+                if (string_eq(method, string_lit("GET"))  ||
+                    string_eq(method, string_lit("PUT"))  ||
+                    string_eq(method, string_lit("POST")) ||
+                    string_eq(method, string_lit("DELETE"))) {
 
-                pattern_parser->state = PATTERN_PARSER_STATE_PARSING_SLASH;
+                    pattern_parser_add_segment(pattern_parser, allocator, method, false);
+                    pattern_parser->method = method;
+                    pattern_parser->state = PATTERN_PARSER_STATE_PARSING_SLASH;
+
+                } else {
+
+                    pattern_parser->state = PATTERN_PARSER_STATE_FAILED;
+
+                }
 
                 break;
             }
@@ -209,10 +209,8 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
             }
 
             case PATTERN_PARSER_STATE_FINISHED:
-            case PATTERN_PARSER_STATE_FAILED: {
-                pattern_parser->method = METHOD_GET;
+            case PATTERN_PARSER_STATE_FAILED:
                 return;
-            }
         }
     }
 
@@ -226,7 +224,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
     }
 }
 
-void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param) {
+static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param) {
     Pattern_Segment *pattern_segment = allocator_alloc(allocator, sizeof(Pattern_Segment));
     pattern_segment->segment = segment;
     pattern_segment->is_path_param = is_path_param;
@@ -481,77 +479,32 @@ static bool server_handle_connection(Server *server, Connection *connection) {
             
             if (parser->state == PARSER_STATE_FINISHED) {
 
-                // a - b - c - d
-                // a -> b -> j
-                //        -> c -> d
-                //   -> d -> h
+                Http_Handler *handler = find_handler(server->segments_tree, request->first_segment);
 
-                // TODO: Comprar trees
-                Http_Handler *handler = NULL;
-                Pattern_Segment *server_segment = NULL;
-                Pattern_Segment *request_segment = request->segments_tree;
-
-                for (server_segment = server->segments_tree;
-                     server_segment != NULL;
-                     server_segment = server_segment->next_segment) {
-
-                    if (string_eq(server_segment->segment, request_segment->segment)) {
-                        request_segment = request_segment->child_segments;
-                        server_segment = server_segment->child_segments;
-                    }
-
-                    for (Pattern_Segment *segment = request->segments_tree;
-                         segment != NULL;
-                         segment = segment->child_segments) {
-
-                        if (string_eq(s->segment, segment->segment)) {
-                            found = true;
-                            server_segment = s->child_segments;
-                            break;
-                        }
-                    }
-                }
+                if (handler) {
                 
-                //
-                // Handler_Pattern *handler_pattern;
-                // for (handler_pattern = server->first_handler_pattern;
-                //      handler_pattern != NULL;
-                //      handler_pattern = handler_pattern->next) {
-                //
-                //     printf("DEBUG: handler_pattern->method=%d request->method=%d\n", handler_pattern->method, request->method);
-                //     printf("DEBUG: handler_pattern->pattern=%.*s request->uri=%.*s\n", string_print(handler_pattern->pattern), string_print(request->uri));
-                //     bool same_method = handler_pattern->method == request->method;
-                //     bool same_uri = string_eq(handler_pattern->pattern, request->uri);
-                //
-                //     if (same_method && same_uri) {
-                //         handler = handler_pattern->handler;
-                //         break;
-                //     }
-                // }
-                //
-                // if (handler) {
-                //
-                //     String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
-                //     if (connection_value == NULL) {
-                //         connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
-                //     } else {
-                //         connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
-                //     }
-                //
+                    String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
+                    if (connection_value == NULL) {
+                        connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
+                    } else {
+                        connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
+                    }
+                
                     Response response;
                     response_init(&response);
-                //
-                //     handler(request, &response);
-                //
+                
+                    handler(request, &response);
+                
                     if (connection_write(connection, response) == -1) {
                         connection->state = CONNECTION_STATE_FAILED;
                         break;
                     }
-                //
+                
                     request_init(request); 
-                // } else {
-                //     // TODO: responder un 404 o algo
-                // }
+
+                } else {
+                    // TODO: responder un 404 o algo
+                }
             }
 
             if (parser->state == PARSER_STATE_FAILED) {
@@ -579,6 +532,38 @@ static bool server_handle_connection(Server *server, Connection *connection) {
     } 
 
     return true;
+}
+
+static Http_Handler *find_handler(Pattern_Segment *pattern_segment, Segment_Literal *segment_literal) {
+    Http_Handler *handler = NULL;
+    Pattern_Segment *server_segment;
+
+    for (server_segment = pattern_segment->first_segment;
+         server_segment != NULL;
+         server_segment = server_segment->next_segment) {
+
+        if (string_eq(server_segment->segment, segment_literal->segment)) {
+
+            if (segment_literal->next_segment == NULL) {
+                handler = server_segment->handler;
+            } else {
+                handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+            }
+
+            break;
+
+        } else if (server_segment->is_path_param) {
+
+            handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+
+        }
+    }
+
+    if (handler) {
+        return handler;
+    } 
+
+    return NULL;
 }
 
 static i32 connection_write(Connection *connection, Response response) {
@@ -800,8 +785,6 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
                 break;
 
-            // TODO: dividir en 2, no me va a funcionar sino porque lo reutilizo para
-            // la URI de entrada que viene sin metodo.
             case PARSER_STATE_PARSING_METHOD:
 
                 if (is_letter(c)) {
@@ -815,20 +798,20 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
                 String method = parser_extract_block(parser, parser->at - 1);
 
-                if (string_eq(method, string_lit("GET"))) {
-                    request->method = METHOD_GET;
-                } else if (string_eq(method, string_lit("PUT"))) {
-                    request->method = METHOD_PUT;
-                } else if (string_eq(method, string_lit("POST"))) {
-                    request->method = METHOD_POST;
-                } else if (string_eq(method, string_lit("DELETE"))) {
-                    request->method = METHOD_DELETE;
-                } else {
-                    parser->state = PARSER_STATE_FAILED;
-                    break;
-                }
+                if (string_eq(method, string_lit("GET"))  ||
+                    string_eq(method, string_lit("PUT"))  ||
+                    string_eq(method, string_lit("POST")) ||
+                    string_eq(method, string_lit("DELETE"))) {
 
-                parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_URI;
+                    request->method = method;
+                    request_add_segment_literal(request, parser->allocator, method);
+                    parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_URI;
+
+                } else {
+
+                    parser->state = PARSER_STATE_FAILED;
+                    
+                }
 
                 break;
 
@@ -851,19 +834,19 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                 }
 
                 String uri = parser_extract_block(parser, parser->at - 1);
+                request->uri = uri;
 
-                Pattern_Parser pattern_parser = {0}; 
-                pattern_parser_parse(&pattern_parser, parser->allocator, uri);
-
-                if (pattern_parser.state == PATTERN_PARSER_STATE_FAILED ||
-                    pattern_parser.state != PATTERN_PARSER_STATE_FINISHED) {
-
-                    parser->state = PARSER_STATE_FAILED;
-                    break;
+                u32 start = 0;
+                for (u32 i = 0; i < uri.size; i++) {
+                    if (uri.data[i] == '/' && i > start) {
+                        String segment = string_with_len(uri.data + start, i - start);
+                        request_add_segment_literal(request, parser->allocator, segment);
+                        start = i;
+                    }
                 }
 
-                request->uri = uri;
-                request->segments_tree = pattern_parser->first_segment;
+                String segment = string_with_len(uri.data + start, uri.size - start);
+                request_add_segment_literal(request, parser->allocator, segment);
 
                 parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_VERSION;
 
@@ -1091,6 +1074,18 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
     }
 
     return parser->at - parser_start_position;
+}
+
+static void request_add_segment_literal(Request *request, Allocator *allocator, String literal) {
+    Segment_Literal *segment = allocator_alloc(allocator, sizeof(Segment_Literal));
+    segment->segment = literal;
+
+    if (request->first_segment == NULL && request->last_segment == NULL) {
+        request->first_segment = segment;
+    } else {
+        request->last_segment->next_segment = segment;
+    }
+    request->last_segment = segment;
 }
 
 static String http_status_reason(u16 status) {
