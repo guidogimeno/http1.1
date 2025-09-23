@@ -545,16 +545,30 @@ static Http_Handler *find_handler(Pattern_Segment *pattern_segment, Segment_Lite
         if (string_eq(server_segment->segment, segment_literal->segment)) {
 
             if (segment_literal->next_segment == NULL) {
-                handler = server_segment->handler;
+                if (server_segment->handler != NULL) {
+                    handler = server_segment->handler;
+                }
             } else {
-                handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+                if (server_segment->child_segments != NULL) {
+                    handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+                }
             }
 
             break;
 
         } else if (server_segment->is_path_param) {
 
-            handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+            if (segment_literal->next_segment == NULL) {
+                if (server_segment->handler != NULL) {
+                    handler = server_segment->handler;
+                }
+            } else {
+                if (server_segment->child_segments != NULL) {
+                    if (!handler) {
+                        handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+                    }
+                }
+            }
 
         }
     }
