@@ -178,7 +178,7 @@ int main(int argc, char *argv[], char *env[]) {
     printf("caso 3: \n");
     http_server_handle(server, "GET /foo/", &foo_handler_3);
 
-    printf("caso 4: \n");// este con problemas
+    printf("caso 4: \n");
     http_server_handle(server, "GET /{bar}/", &foo_handler_4);
 
     printf("caso 5: \n");

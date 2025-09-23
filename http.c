@@ -9,52 +9,6 @@ Server *http_server_make(Allocator *allocator) {
     return server;
 }
 
-static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment) {
-
-    Pattern_Segment *server_segment = NULL;
-
-    for (server_segment = *tree;
-         server_segment != NULL;
-         server_segment = server_segment->next_segment) {
-
-        if (string_eq(server_segment->segment, segment->segment)) {
-            break;
-        }
-
-    }
-
-    if (server_segment) {
-
-        if (segment->child_segments) {
-
-            if (server_segment->child_segments) {
-                segments_tree_add(&server_segment->child_segments, segment->child_segments);
-            } else {
-                server_segment->child_segments = segment->child_segments;
-            }
-
-        } else {
-
-            if (server_segment->handler) {
-                panic_with_msg("http_server_handle failed due tu duplicated paths");
-            } else {
-                server_segment->handler = segment->handler;
-            }
-
-        }
-        
-    } else {
-
-        if (*tree == NULL) {
-            *tree = segment;
-        } else {
-            (*tree)->last_segment->next_segment = segment;
-            (*tree)->last_segment = segment;
-        }
-    
-    }
-}
-
 void print_segments(Pattern_Segment *s, u32 nivel) {
 
     for (Pattern_Segment *segment = s;
@@ -534,38 +488,84 @@ static bool server_handle_connection(Server *server, Connection *connection) {
     return true;
 }
 
-static Http_Handler *find_handler(Pattern_Segment *pattern_segment, Segment_Literal *segment_literal) {
-    Http_Handler *handler = NULL;
-    Pattern_Segment *server_segment;
+static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment) {
 
-    for (server_segment = pattern_segment->first_segment;
+    Pattern_Segment *server_segment = NULL;
+
+    for (server_segment = *tree;
          server_segment != NULL;
          server_segment = server_segment->next_segment) {
 
-        if (string_eq(server_segment->segment, segment_literal->segment)) {
+        if (string_eq(server_segment->segment, segment->segment)) {
+            break;
+        }
+
+    }
+
+    if (server_segment) {
+
+        if (segment->child_segments) {
+
+            if (server_segment->child_segments) {
+                segments_tree_add(&server_segment->child_segments, segment->child_segments);
+            } else {
+                server_segment->child_segments = segment->child_segments;
+            }
+
+        } else {
+
+            if (server_segment->handler) {
+                panic_with_msg("http_server_handle failed due tu duplicated paths");
+            } else {
+                server_segment->handler = segment->handler;
+            }
+
+        }
+        
+    } else {
+
+        if (*tree == NULL) {
+            *tree = segment;
+        } else {
+            (*tree)->last_segment->next_segment = segment;
+            (*tree)->last_segment = segment;
+        }
+    
+    }
+}
+
+static Http_Handler *find_handler(Pattern_Segment *pattern_segments, Segment_Literal *segment_literal) {
+    Http_Handler *handler = NULL;
+    Pattern_Segment *pattern_segment;
+
+    for (pattern_segment = pattern_segments->first_segment;
+         pattern_segment != NULL;
+         pattern_segment = pattern_segment->next_segment) {
+
+        if (string_eq(pattern_segment->segment, segment_literal->segment)) {
 
             if (segment_literal->next_segment == NULL) {
-                if (server_segment->handler != NULL) {
-                    handler = server_segment->handler;
+                if (pattern_segment->handler != NULL) {
+                    handler = pattern_segment->handler;
                 }
             } else {
-                if (server_segment->child_segments != NULL) {
-                    handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+                if (pattern_segment->child_segments != NULL) {
+                    handler = find_handler(pattern_segment->child_segments, segment_literal->next_segment);
                 }
             }
 
             break;
 
-        } else if (server_segment->is_path_param) {
+        } else if (pattern_segment->is_path_param) {
 
             if (segment_literal->next_segment == NULL) {
-                if (server_segment->handler != NULL) {
-                    handler = server_segment->handler;
+                if (pattern_segment->handler != NULL) {
+                    handler = pattern_segment->handler;
                 }
             } else {
-                if (server_segment->child_segments != NULL) {
+                if (pattern_segment->child_segments != NULL) {
                     if (!handler) {
-                        handler = find_handler(server_segment->child_segments, segment_literal->next_segment);
+                        handler = find_handler(pattern_segment->child_segments, segment_literal->next_segment);
                     }
                 }
             }
