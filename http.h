@@ -25,8 +25,7 @@ typedef struct Body Body;
 typedef struct Parser_Buffer Parser_Buffer;
 typedef struct Parser Parser;
 typedef struct Pattern_Parser Pattern_Parser;
-typedef struct Pattern_Segment Pattern_Segment;
-typedef struct Segment_Literal Segment_Literal;
+typedef struct Segment_Pattern Segment_Pattern;
 
 typedef enum Method Method;
 typedef enum Connection_State Connection_State;
@@ -70,25 +69,25 @@ enum Pattern_Parser_State {
     PATTERN_PARSER_STATE_FINISHED
 };
 
-struct Pattern_Segment {
-    Pattern_Segment *next_segment;
-    Pattern_Segment *first_segment;
-    Pattern_Segment *last_segment;
-    Pattern_Segment *child_segments;
+struct Segment_Pattern {
+    Http_Handler *handler;
+
+    Segment_Pattern *next_segment;
+    Segment_Pattern *first_segment;
+    Segment_Pattern *last_segment;
+    Segment_Pattern *child_segments;
 
     String segment;
-    bool is_path_param;
+    String path_param_name;
 
-    Http_Handler *handler;
+    bool is_path_param;
 };
 
 struct Pattern_Parser {
     Pattern_Parser_State state;
 
-    String method;
-
-    Pattern_Segment *first_segment;
-    Pattern_Segment *last_segment;
+    Segment_Pattern *first_segment;
+    Segment_Pattern *last_segment;
 };
 
 struct Parser_Buffer {
@@ -141,16 +140,13 @@ struct Body {
     u32 length;
 };
 
-struct Segment_Literal {
-    Segment_Literal *next_segment;
-    String segment;
-};
-
 struct Request {
     String method;
+
     String uri;
-    Segment_Literal *first_segment;
-    Segment_Literal *last_segment;
+    Segment_Pattern *first_segment;
+    Segment_Pattern *last_segment;
+
     String version;
     Headers_Map headers_map;
     Body body;
@@ -195,12 +191,13 @@ struct Server {
     u32 connections_count;
     Connection *connections;
 
-    Pattern_Segment *segments_tree;
+    Segment_Pattern *patterns_tree;
 };
 
 Server *http_server_make(Allocator *allocator);
 void http_server_handle(Server *server, char *pattern, Http_Handler *handler);
 i32 http_server_start(Server *server, u32 port, char *host);
+char *http_get_path_param(Request *request, char *name);
 
 static i32 signals_init(void);
 static void signal_handler(i32 signal_number);
@@ -212,8 +209,9 @@ static Connection *server_find_connection(Server *server, i32 file_descriptor);
 static Connection *server_find_free_connection(Server *server);
 static bool server_handle_connection(Server *server, Connection *connection);
 
-static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment);
-static Http_Handler *find_handler(Pattern_Segment *pattern_segment, Segment_Literal *segment_literal);
+static void patterns_tree_add(Segment_Pattern **tree, Segment_Pattern *segment);
+static Http_Handler *find_handler_while_adding_path_params(Segment_Pattern **request_patterns,
+                                                           Segment_Pattern *server_patterns);
 
 static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events);
 static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 file_descriptor);
@@ -223,7 +221,7 @@ static i32 connection_write(Connection *connection, Response response);
 
 static String encode_response(Allocator *allocator, Response response);
 
-static void parser_init(Parser *parser, Allocator * allocator);
+static void parser_init(Parser *parser, Allocator *allocator);
 static char parser_get_char(Parser *parser);
 static Parser_Buffer *parser_push_buffer(Parser *parser);
 static u32 parser_parse_request(Parser *parser, Request *request);
@@ -234,6 +232,7 @@ static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *alloca
 static String http_status_reason(u16 status);
 
 static void request_init(Request *request);
+static void request_add_uri_segments(Request *request, Allocator *allocator, String uri);
 static void request_add_segment_literal(Request *request, Allocator *allocator, String literal);
 
 static void response_init(Response *response);

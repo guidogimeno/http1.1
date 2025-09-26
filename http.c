@@ -9,16 +9,16 @@ Server *http_server_make(Allocator *allocator) {
     return server;
 }
 
-void print_segments(Pattern_Segment *s, u32 nivel) {
+void print_segments(Segment_Pattern *s, u32 nivel) {
 
-    for (Pattern_Segment *segment = s;
+    for (Segment_Pattern *segment = s;
          segment != NULL;
          segment = segment->next_segment) {
 
         printf("%.*s \n", string_print(segment->segment));
 
         if (segment->child_segments) {
-            
+           
             printf("empieza padre: %.*s nivel: %d \n", string_print(segment->segment), nivel + 1);
             print_segments(segment->child_segments, nivel + 1);
             printf("termina padre: %.*s nivel: %d \n", string_print(segment->segment), nivel + 1);
@@ -47,10 +47,10 @@ void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
 
     parser.last_segment->handler = handler;
 
-    segments_tree_add(&server->segments_tree, parser.first_segment);
+    patterns_tree_add(&server->patterns_tree, parser.first_segment);
 
     // TODO: Borrar logs
-    print_segments(server->segments_tree, 0);
+    print_segments(server->patterns_tree, 0);
     printf("\n");
 }
 
@@ -86,7 +86,6 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
                     string_eq(method, string_lit("DELETE"))) {
 
                     pattern_parser_add_segment(pattern_parser, allocator, method, false);
-                    pattern_parser->method = method;
                     pattern_parser->state = PATTERN_PARSER_STATE_PARSING_SLASH;
 
                 } else {
@@ -129,7 +128,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
                     break;
                 }
 
-                String segment = string_with_len(pattern_str.data + slash_pos, i - slash_pos);
+                String segment = string_with_len(pattern_str.data + slash_pos + 1, i - slash_pos - 1);
                 pattern_parser_add_segment(pattern_parser, allocator, segment, false);
 
                 slash_pos = i;
@@ -171,7 +170,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
     if (pattern_parser->state == PATTERN_PARSER_STATE_PARSING_PATH_SEGMENT ||
         pattern_parser->state == PATTERN_PARSER_STATE_PARSING_SLASH) {
 
-        String segment = string_with_len(pattern_str.data + slash_pos, pattern_str.size - slash_pos);
+        String segment = string_with_len(pattern_str.data + slash_pos + 1, pattern_str.size - slash_pos - 1);
         pattern_parser_add_segment(pattern_parser, allocator, segment, false);
 
         pattern_parser->state = PATTERN_PARSER_STATE_FINISHED;
@@ -179,22 +178,22 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
 }
 
 static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param) {
-    Pattern_Segment *pattern_segment = allocator_alloc(allocator, sizeof(Pattern_Segment));
-    pattern_segment->segment = segment;
-    pattern_segment->is_path_param = is_path_param;
-    pattern_segment->handler = NULL;
-    pattern_segment->next_segment = NULL;
-    pattern_segment->first_segment = pattern_segment;
-    pattern_segment->last_segment = pattern_segment;
-    pattern_segment->child_segments = NULL;
+    Segment_Pattern *segment_pattern = allocator_alloc(allocator, sizeof(Segment_Pattern));
+    segment_pattern->segment = segment;
+    segment_pattern->is_path_param = is_path_param;
+    segment_pattern->handler = NULL;
+    segment_pattern->next_segment = NULL;
+    segment_pattern->first_segment = segment_pattern;
+    segment_pattern->last_segment = segment_pattern;
+    segment_pattern->child_segments = NULL;
 
     if (parser->first_segment == NULL && parser->last_segment == NULL) {
-        parser->first_segment = pattern_segment;
+        parser->first_segment = segment_pattern;
     } else {
-        parser->last_segment->child_segments = pattern_segment;
+        parser->last_segment->child_segments = segment_pattern;
     }
 
-    parser->last_segment = pattern_segment;
+    parser->last_segment = segment_pattern;
 }
 
 i32 http_server_start(Server *server, u32 port, char *host) {
@@ -255,6 +254,20 @@ i32 http_server_start(Server *server, u32 port, char *host) {
     close(server->file_descriptor);
 
     return EXIT_SUCCESS;
+}
+
+char *http_get_path_param(Request *request, char *name) {
+
+    // String path_param_name = string(name);
+    //
+    // u32 i = 0;
+    // for (Segment_Literal *segment = request->first_segment;
+    //      segment != NULL;
+    //      segment = segment->child_segments) {
+    //
+    // }
+
+    return NULL;
 }
 
 static void signal_handler(i32 signal_number) {
@@ -433,10 +446,19 @@ static bool server_handle_connection(Server *server, Connection *connection) {
             
             if (parser->state == PARSER_STATE_FINISHED) {
 
-                Http_Handler *handler = find_handler(server->segments_tree, request->first_segment);
-
-                if (handler) {
+                Http_Handler *handler = find_handler_while_adding_path_params(&request->first_segment,
+                                                                              server->patterns_tree);
+                printf("-----------------\n");
+                for (Segment_Pattern *s = request->first_segment;
+                    s != NULL;
+                    s = s->next_segment) {
+                    printf("segment: %.*s ", string_print(s->segment));
+                    printf("is_path_param: %b ", s->is_path_param);
+                    printf("path_param_name: %.*s\n", string_print(s->path_param_name));
+                }
                 
+                if (handler) {
+
                     String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
                     if (connection_value == NULL) {
                         connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
@@ -488,15 +510,16 @@ static bool server_handle_connection(Server *server, Connection *connection) {
     return true;
 }
 
-static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment) {
+static void patterns_tree_add(Segment_Pattern **tree, Segment_Pattern *segment) {
 
-    Pattern_Segment *server_segment = NULL;
+    Segment_Pattern *server_segment = NULL;
 
     for (server_segment = *tree;
          server_segment != NULL;
          server_segment = server_segment->next_segment) {
 
-        if (string_eq(server_segment->segment, segment->segment)) {
+        if (string_eq(server_segment->segment, segment->segment) &&
+                server_segment->is_path_param == segment->is_path_param) {
             break;
         }
 
@@ -507,7 +530,7 @@ static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment) 
         if (segment->child_segments) {
 
             if (server_segment->child_segments) {
-                segments_tree_add(&server_segment->child_segments, segment->child_segments);
+                patterns_tree_add(&server_segment->child_segments, segment->child_segments);
             } else {
                 server_segment->child_segments = segment->child_segments;
             }
@@ -534,50 +557,65 @@ static void segments_tree_add(Pattern_Segment **tree, Pattern_Segment *segment) 
     }
 }
 
-static Http_Handler *find_handler(Pattern_Segment *pattern_segments, Segment_Literal *segment_literal) {
+static Http_Handler *find_handler_while_adding_path_params(Segment_Pattern **request_patterns,
+                                                           Segment_Pattern *server_patterns) {
+
     Http_Handler *handler = NULL;
-    Pattern_Segment *pattern_segment;
+    Segment_Pattern *request_pattern = *request_patterns;
 
-    for (pattern_segment = pattern_segments->first_segment;
-         pattern_segment != NULL;
-         pattern_segment = pattern_segment->next_segment) {
+    for (Segment_Pattern *server_pattern = server_patterns->first_segment;
+         server_pattern != NULL;
+         server_pattern = server_pattern->next_segment) {
 
-        if (string_eq(pattern_segment->segment, segment_literal->segment)) {
+        if (!server_pattern->is_path_param && 
+                string_eq(server_pattern->segment, request_pattern->segment)) {
 
-            if (segment_literal->next_segment == NULL) {
-                if (pattern_segment->handler != NULL) {
-                    handler = pattern_segment->handler;
+            if (!request_pattern->next_segment) {
+
+                if (server_pattern->handler) {
+                    handler = server_pattern->handler;
+                    request_pattern->is_path_param = false;
                 }
-            } else {
-                if (pattern_segment->child_segments != NULL) {
-                    handler = find_handler(pattern_segment->child_segments, segment_literal->next_segment);
+
+            } else if (server_pattern->child_segments) {
+
+                handler = find_handler_while_adding_path_params(&request_pattern->next_segment,
+                                                                server_pattern->child_segments);
+                if (handler) {
+                    request_pattern->is_path_param = false;
                 }
+                
             }
 
             break;
 
-        } else if (pattern_segment->is_path_param) {
+        } else if (server_pattern->is_path_param) {
 
-            if (segment_literal->next_segment == NULL) {
-                if (pattern_segment->handler != NULL) {
-                    handler = pattern_segment->handler;
+            if (!request_pattern->next_segment) {
+
+                if (server_pattern->handler) {
+                    handler = server_pattern->handler;
+                    request_pattern->path_param_name = server_pattern->segment;
+                    request_pattern->is_path_param = true;
                 }
-            } else {
-                if (pattern_segment->child_segments != NULL) {
-                    if (!handler) {
-                        handler = find_handler(pattern_segment->child_segments, segment_literal->next_segment);
+
+            } else if (server_pattern->child_segments) {
+
+                if (!handler) {
+
+                    handler = find_handler_while_adding_path_params(&request_pattern->next_segment,
+                                                                    server_pattern->child_segments);
+                    if (handler) {
+                        request_pattern->path_param_name = server_pattern->segment;
+                        request_pattern->is_path_param = true;
                     }
+
                 }
             }
-
         }
     }
 
-    if (handler) {
-        return handler;
-    } 
-
-    return NULL;
+    return handler;
 }
 
 static i32 connection_write(Connection *connection, Response response) {
@@ -850,17 +888,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                 String uri = parser_extract_block(parser, parser->at - 1);
                 request->uri = uri;
 
-                u32 start = 0;
-                for (u32 i = 0; i < uri.size; i++) {
-                    if (uri.data[i] == '/' && i > start) {
-                        String segment = string_with_len(uri.data + start, i - start);
-                        request_add_segment_literal(request, parser->allocator, segment);
-                        start = i;
-                    }
-                }
-
-                String segment = string_with_len(uri.data + start, uri.size - start);
-                request_add_segment_literal(request, parser->allocator, segment);
+                request_add_uri_segments(request, parser->allocator, uri);
 
                 parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_VERSION;
 
@@ -1090,9 +1118,45 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
     return parser->at - parser_start_position;
 }
 
+static void request_add_uri_segments(Request *request, Allocator *allocator, String uri) {
+
+    if (uri.size == 1 && uri.data[0] == '/') {
+
+        request_add_segment_literal(request, allocator, string(""));
+
+    } else {
+
+        u32 start = 1;
+        for (u32 i = 1; i < uri.size; i++) {
+            if (uri.data[i] == '/') {
+                String segment = string_with_len(uri.data + start, i - start);
+                request_add_segment_literal(request, allocator, segment);
+                start = i + 1;
+            }
+        }
+
+        // remanente
+        if (start < uri.size) {
+
+            String segment = string_with_len(uri.data + start, uri.size - start);
+            request_add_segment_literal(request, allocator, segment);
+
+            // si el ultimo es un '/'
+        } else if (uri.size > 1 && uri.data[uri.size - 1] == '/') {
+
+            request_add_segment_literal(request, allocator, string(""));
+
+        }
+    }
+
+}
+
 static void request_add_segment_literal(Request *request, Allocator *allocator, String literal) {
-    Segment_Literal *segment = allocator_alloc(allocator, sizeof(Segment_Literal));
+
+    Segment_Pattern *segment = allocator_alloc(allocator, sizeof(Segment_Pattern));
+    *segment = (Segment_Pattern){0};
     segment->segment = literal;
+    segment->is_path_param = false;
 
     if (request->first_segment == NULL && request->last_segment == NULL) {
         request->first_segment = segment;

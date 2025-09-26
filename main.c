@@ -126,6 +126,8 @@ static void foo_handler_8(Request *req, Response *res) {
 static void foo_handler_9(Request *req, Response *res) {
     Allocator *allocator = allocator_make(1 * MB);
 
+    // char *path_param = http_get_path_param(req, "");
+
     String body = string("{ \"NUEVE\": \"NUEVE\" }");
 
     response_add_header(res, string_lit("hola"), string_lit("mundo"));
@@ -184,7 +186,7 @@ int main(int argc, char *argv[], char *env[]) {
     printf("caso 5: \n");
     http_server_handle(server, "GET /foo/{bar}", &foo_handler_5);
 
-    printf("caso 6: \n");// problemas
+    printf("caso 6: \n");
     http_server_handle(server, "GET /{bar}/baz", &foo_handler_6);
 
     printf("caso 7: \n");

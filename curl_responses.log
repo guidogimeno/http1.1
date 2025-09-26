@@ -1,0 +1,96 @@
+Executing command 1: curl -X GET http://localhost:8080/
+Response for command 1:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    18  100    18    0     0   4155      0 --:--:-- --:--:-- --:--:--  4500
+{ "CERO": "CERO" }
+---
+
+Executing command 2: curl -X GET http://localhost:8080/foo
+Response for command 2:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    16  100    16    0     0  42895      0 --:--:-- --:--:-- --:--:-- 16000
+{ "UNO": "UNO" }
+---
+
+Executing command 3: curl -X GET http://localhost:8080/3333
+Response for command 3:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    16  100    16    0     0  42328      0 --:--:-- --:--:-- --:--:-- 16000
+{ "DOS": "DOS" }
+---
+
+Executing command 4: curl -X GET http://localhost:8080/foo/
+Response for command 4:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    18  100    18    0     0  52941      0 --:--:-- --:--:-- --:--:-- 18000
+{ "TRES": "TRES" }
+---
+
+Executing command 5: curl -X GET http://localhost:8080/1234/
+Response for command 5:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    22  100    22    0     0  64705      0 --:--:-- --:--:-- --:--:-- 22000
+{ "CUATRO": "CUATRO" }
+---
+
+Executing command 6: curl -X GET http://localhost:8080/foo/1234
+Response for command 6:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    20  100    20    0     0  48543      0 --:--:-- --:--:-- --:--:-- 20000
+{ "CINCO": "CINCO" }
+---
+
+Executing command 7: curl -X GET http://localhost:8080/1234/baz
+Response for command 7:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    18  100    18    0     0  52941      0 --:--:-- --:--:-- --:--:-- 18000
+{ "SEIS": "SEIS" }
+---
+
+Executing command 8: curl -X GET http://localhost:8080/1234/4444
+Response for command 8:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    20  100    20    0     0  46620      0 --:--:-- --:--:-- --:--:-- 20000
+{ "SIETE": "SIETE" }
+---
+
+Executing command 9: curl -X GET http://localhost:8080/foo/bar/baz/
+Response for command 9:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    18  100    18    0     0  52478      0 --:--:-- --:--:-- --:--:-- 18000
+{ "OCHO": "OCHO" }
+---
+
+Executing command 10: curl -X GET http://localhost:8080/1234/bar/910/
+Response for command 10:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    20  100    20    0     0  52083      0 --:--:-- --:--:-- --:--:-- 20000
+{ "NUEVE": "NUEVE" }
+---
+
+Executing command 11: curl -X GET http://localhost:8080/1234/5678/910/
+Response for command 11:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    18  100    18    0     0  51282      0 --:--:-- --:--:-- --:--:-- 18000
+{ "DIEZ": "DIEZ" }
+---
+
+Executing command 12: curl -X GET http://localhost:8080/foo/1234/baz
+Response for command 12:
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    18  100    18    0     0  50000      0 --:--:-- --:--:-- --:--:-- 18000
+{ "ONCE": "ONCE" }
+---
+
