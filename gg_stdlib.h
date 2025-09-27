@@ -214,6 +214,7 @@ u32    string_size(const char *text);
 bool cstr_eq(char *s1, char *s2);
 bool string_eq(String s1, String s2);
 bool string_eq_cstr(String s1, char *s2);
+bool string_is_empty(String str);
 
 String string_to_lower(Allocator *a, String str);
 String string_to_upper(Allocator *a, String str);
@@ -285,6 +286,10 @@ bool string_eq_cstr(String s1, char *s2) {
         }
     }
     return true;
+}
+
+bool string_is_empty(String str) {
+    return str.size <= 0;
 }
 
 bool cstr_eq(char *s1, char *s2) {

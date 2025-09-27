@@ -47,6 +47,12 @@ static void foo_handler_1(Request *req, Response *res) {
 static void foo_handler_2(Request *req, Response *res) {
     // TODO: Como manejo los allocadores? Les doy yo uno?
     // Scratches?
+    
+    String str = http_get_path_param(req, string_lit("bar"));
+    if (!string_is_empty(str)) {
+        printf("GUIDO DEBUG: %.*s\n", string_print(str));
+    }
+
     Allocator *allocator = allocator_make(1 * MB);
 
     String body = string("{ \"DOS\": \"DOS\" }");
@@ -140,6 +146,15 @@ static void foo_handler_10(Request *req, Response *res) {
     Allocator *allocator = allocator_make(1 * MB);
 
     String body = string("{ \"DIEZ\": \"DIEZ\" }");
+    String foo = http_get_path_param(req, string("foo"));
+    String bar = http_get_path_param(req, string("bar"));
+    String baz = http_get_path_param(req, string("baz"));
+
+    printf("GUIDO DEBUG: %.*s, %.*s, %.*s\n", 
+            string_print(foo),
+            string_print(bar),
+            string_print(baz)
+    );
 
     response_add_header(res, string_lit("hola"), string_lit("mundo"));
     response_set_status(res, 200);

@@ -256,18 +256,21 @@ i32 http_server_start(Server *server, u32 port, char *host) {
     return EXIT_SUCCESS;
 }
 
-char *http_get_path_param(Request *request, char *name) {
+String http_get_path_param(Request *request, String name) {
+    
+    for (Segment_Pattern *segment = request->first_segment;
+         segment != NULL;
+         segment = segment->next_segment) {
 
-    // String path_param_name = string(name);
-    //
-    // u32 i = 0;
-    // for (Segment_Literal *segment = request->first_segment;
-    //      segment != NULL;
-    //      segment = segment->child_segments) {
-    //
-    // }
+        if (segment->is_path_param && 
+                string_eq(segment->path_param_name, name)) {
 
-    return NULL;
+            return segment->segment;
+        }
+
+    }
+
+    return string_lit("");
 }
 
 static void signal_handler(i32 signal_number) {
