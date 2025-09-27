@@ -198,6 +198,7 @@ Server *http_server_make(Allocator *allocator);
 void http_server_handle(Server *server, char *pattern, Http_Handler *handler);
 i32 http_server_start(Server *server, u32 port, char *host);
 String http_get_path_param(Request *request, String name);
+String http_get_query_param(Request *request, String name);
 
 static i32 signals_init(void);
 static void signal_handler(i32 signal_number);

@@ -54,6 +54,14 @@ void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
     printf("\n");
 }
 
+/*
+ * Parsea el patron del path.
+ * Estos path tienen el formato:
+ *
+ * [GET|POST|PUT] /foo/{bar}/baz
+ *
+ * Esto crea una lista de segmentos dentro del parser.
+ */
 static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allocator, String pattern_str) {
  
     pattern_parser->state = PATTERN_PARSER_STATE_STARTED;
@@ -256,6 +264,12 @@ i32 http_server_start(Server *server, u32 port, char *host) {
     return EXIT_SUCCESS;
 }
 
+/*
+ * Busca el path param en base al nombre de la variable definido en la URL
+ * Ejemplo: `/foo/{bar}`
+ * En este caso el nombre de la variable seria "bar".
+ * En caso de no encontrar el atributo, retorna un string vacio.
+ */
 String http_get_path_param(Request *request, String name) {
     
     for (Segment_Pattern *segment = request->first_segment;
@@ -270,6 +284,10 @@ String http_get_path_param(Request *request, String name) {
 
     }
 
+    return string_lit("");
+}
+
+String http_get_query_param(Request *request, String name) {
     return string_lit("");
 }
 
@@ -513,6 +531,30 @@ static bool server_handle_connection(Server *server, Connection *connection) {
     return true;
 }
 
+/*
+ * Agrega la lista enlazada de segmentos al arbol de segmentos.
+ * Este arbol no es binario, sino que cada nodo puede tener multiples hijos.
+ * Con lo cual se comparan los nodos del arbol con los de la lista enlazada hasta
+ * encontrar el ancestro en comun mas reciente.
+ * Una vez encontrado se agregan los nodos restantes al arbol.
+ *
+ * De:
+ * 
+ *          Arbol       Lista Enlazada
+ *           (A)            (A)->(B)->(D)
+ *          /   \
+ *        (B)   (C)
+ *
+ *
+ * A:
+ *          Arbol       
+ *           (A)     
+ *          /   \
+ *        (B)   (C)
+ *        /
+ *      (D)
+ *
+ */
 static void patterns_tree_add(Segment_Pattern **tree, Segment_Pattern *segment) {
 
     Segment_Pattern *server_segment = NULL;
@@ -879,7 +921,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
             case PARSER_STATE_PARSING_URI:
 
-                if (is_alphanum(c) || c == '/' || c == '.') {
+                if (is_alphanum(c) || c == '/' || c == '.' || c == '=' || c == '?') {
                     break;
                 }
 
@@ -1144,14 +1186,13 @@ static void request_add_uri_segments(Request *request, Allocator *allocator, Str
             String segment = string_with_len(uri.data + start, uri.size - start);
             request_add_segment_literal(request, allocator, segment);
 
-            // si el ultimo es un '/'
+        // si el ultimo es un '/'
         } else if (uri.size > 1 && uri.data[uri.size - 1] == '/') {
 
             request_add_segment_literal(request, allocator, string(""));
 
         }
     }
-
 }
 
 static void request_add_segment_literal(Request *request, Allocator *allocator, String literal) {
