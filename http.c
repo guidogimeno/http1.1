@@ -469,14 +469,14 @@ static bool server_handle_connection(Server *server, Connection *connection) {
 
                 Http_Handler *handler = find_handler_while_adding_path_params(&request->first_segment,
                                                                               server->patterns_tree);
-                printf("-----------------\n");
-                for (Segment_Pattern *s = request->first_segment;
-                    s != NULL;
-                    s = s->next_segment) {
-                    printf("segment: %.*s ", string_print(s->segment));
-                    printf("is_path_param: %b ", s->is_path_param);
-                    printf("path_param_name: %.*s\n", string_print(s->path_param_name));
-                }
+                // printf("-----------------\n");
+                // for (Segment_Pattern *s = request->first_segment;
+                //     s != NULL;
+                //     s = s->next_segment) {
+                //     printf("segment: %.*s ", string_print(s->segment));
+                //     printf("is_path_param: %b ", s->is_path_param);
+                //     printf("path_param_name: %.*s\n", string_print(s->path_param_name));
+                // }
                 
                 if (handler) {
 
@@ -921,7 +921,10 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
             case PARSER_STATE_PARSING_URI:
 
-                if (is_alphanum(c) || c == '/' || c == '.' || c == '=' || c == '?') {
+                if (is_alphanum(c) || c == '/' || c == '.' || c == '=' 
+                                   || c == '?' || c == '_' || c == '-'
+                                   || c == '&') {
+
                     break;
                 }
 
@@ -1165,34 +1168,99 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
 static void request_add_uri_segments(Request *request, Allocator *allocator, String uri) {
 
-    if (uri.size == 1 && uri.data[0] == '/') {
+    u32 i = 1;
 
-        request_add_segment_literal(request, allocator, string(""));
+    { // Path segments
+    
+        // Si el path es unicamente: '/'
+        if (uri.data[0] == '/' && (uri.size == 1 || (uri.size > 1 && uri.data[1] == '?'))) {
 
-    } else {
+            request_add_segment_literal(request, allocator, string_lit(""));
 
-        u32 start = 1;
-        for (u32 i = 1; i < uri.size; i++) {
-            if (uri.data[i] == '/') {
-                String segment = string_with_len(uri.data + start, i - start);
+        } else {
+
+            u32 start = 1;
+
+            while (i < uri.size && uri.data[i] != '?') {
+
+                if (uri.data[i] == '/') {
+                    String segment = string_with_len(uri.data + start, i - start);
+                    request_add_segment_literal(request, allocator, segment);
+                    start = i + 1;
+                }
+
+                i++;
+            }
+
+            if (uri.size > 1) {
+
+                String segment;
+
+                // Si el ultimo caracter leido fue un '/'
+                if (uri.data[i - 1] == '/') {
+                    segment = string_lit("");
+                } else {
+                    // Remanente
+                    segment = string_with_len(uri.data + start, i - start);
+                }
+
                 request_add_segment_literal(request, allocator, segment);
-                start = i + 1;
             }
         }
+    }
+    
+    { // Query params
+      
+        bool has_query_params = uri.data[i] == '?';
+        if (has_query_params) {
 
-        // remanente
-        if (start < uri.size) {
+            u32 key_pos = i + 1;
+            u32 value_pos = i + 1;
 
-            String segment = string_with_len(uri.data + start, uri.size - start);
-            request_add_segment_literal(request, allocator, segment);
+            String query_key;
 
-        // si el ultimo es un '/'
-        } else if (uri.size > 1 && uri.data[uri.size - 1] == '/') {
+            while (i < uri.size) {
 
-            request_add_segment_literal(request, allocator, string(""));
+                char c = uri.data[i];
 
+                if (c == '=') {
+
+                    query_key = string_with_len(uri.data + key_pos, i - key_pos);
+
+                    value_pos = i + 1;
+
+                } else if (c == '&') {
+
+                    String query_value = string_with_len(uri.data + value_pos, i - value_pos);
+                    request_add_query_param(request, allocator, query_key, query_value);
+
+                    key_pos = i + 1;
+                }
+
+                i++;
+            }
+
+            // Remanente
+            String query_value = string_with_len(uri.data + value_pos, i - value_pos);
+            request_add_query_param(request, allocator, query_key, query_value);
         }
     }
+}
+
+static void request_add_query_param(Request *request, Allocator *allocator, String key, String value) {
+
+    Query_Param *query_param = allocator_alloc(allocator, sizeof(Query_Param));
+    *query_param = (Query_Param){0};
+    query_param->next = NULL;
+    query_param->key = key;
+    query_param->value = value;
+
+    if (request->first_query_param == NULL && request->last_query_param == NULL) {
+        request->first_query_param = query_param;
+    } else {
+        request->last_query_param->next = query_param;
+    }
+    request->last_query_param = query_param;
 }
 
 static void request_add_segment_literal(Request *request, Allocator *allocator, String literal) {

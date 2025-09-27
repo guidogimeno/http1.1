@@ -26,6 +26,7 @@ typedef struct Parser_Buffer Parser_Buffer;
 typedef struct Parser Parser;
 typedef struct Pattern_Parser Pattern_Parser;
 typedef struct Segment_Pattern Segment_Pattern;
+typedef struct Query_Param Query_Param;
 
 typedef enum Method Method;
 typedef enum Connection_State Connection_State;
@@ -140,12 +141,20 @@ struct Body {
     u32 length;
 };
 
+struct Query_Param {
+    Query_Param *next;
+    String key;
+    String value;
+};
+
 struct Request {
     String method;
 
     String uri;
     Segment_Pattern *first_segment;
     Segment_Pattern *last_segment;
+    Query_Param *first_query_param;
+    Query_Param *last_query_param;
 
     String version;
     Headers_Map headers_map;
@@ -235,6 +244,7 @@ static String http_status_reason(u16 status);
 static void request_init(Request *request);
 static void request_add_uri_segments(Request *request, Allocator *allocator, String uri);
 static void request_add_segment_literal(Request *request, Allocator *allocator, String literal);
+static void request_add_query_param(Request *request, Allocator *allocator, String key, String value);
 
 static void response_init(Response *response);
 static void response_set_status(Response *response, u32 status);

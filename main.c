@@ -27,6 +27,8 @@ static void foo_handler_0(Request *req, Response *res) {
 
     String body = string("{ \"CERO\": \"CERO\" }");
 
+    String query_param = http_get_query_param(req, string_lit("foo"));
+
     response_add_header(res, string_lit("hola"), string_lit("mundo"));
     response_set_status(res, 200);
 
