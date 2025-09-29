@@ -1,11 +1,3 @@
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <signal.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #if defined(__linux__) || defined(__gnu_linux__)
     #define OS_LINUX 1
 #elif defined(__APPLE__) && defined(__MACH__)
@@ -21,7 +13,15 @@
     #define OS_MAC 0
 #endif
 
-#ifdef __APPLE__
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#if OS_MAC
 #include <sys/types.h>
 #include <sys/event.h>
 #else
