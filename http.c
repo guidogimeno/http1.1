@@ -42,7 +42,6 @@ static void response_init(Response *response);
 
 static void headers_init(Headers_Map *headers_map);
 static void headers_put(Headers_Map *headers_map, String field_name, String field_value);
-static String *headers_get(Headers_Map *headers_map, String field_name);
 
 
 static volatile bool main_running = true;
@@ -309,7 +308,7 @@ Body http_request_get_body(Request *request) {
 }
 
 String http_request_get_header(Request *request, String name) {
-    String *value = headers_get(&request->headers_map, name);
+    String *value = http_headers_get(&request->headers_map, name);
     if (value) {
         return *value;
     }
@@ -536,7 +535,7 @@ static bool server_handle_connection(Server *server, Connection *connection) {
                                                                               server->patterns_tree);
                 if (handler) {
 
-                    String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
+                    String *connection_value = http_headers_get(&request->headers_map, string_lit("connection"));
                     if (connection_value == NULL) {
                         connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
                     } else {
@@ -1140,8 +1139,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                     break;
                 }
 
-                String *content_length = headers_get(&request->headers_map, 
-                                            string_lit("content-length"));
+                String *content_length = http_headers_get(&request->headers_map, string_lit("content-length"));
 
                 if (content_length != NULL) {
 
@@ -1410,14 +1408,14 @@ static void headers_put(Headers_Map *headers_map, String field_name, String fiel
     headers_map->length++;
 }
 
-static String *headers_get(Headers_Map *headers_map, String field_name) {
+String *http_headers_get(Headers_Map *headers_map, String name) {
     u32 headers_cap = headers_map->capacity;
-    u32 header_index = hash_string(field_name) % headers_cap; 
+    u32 header_index = hash_string(name) % headers_cap; 
 
     Header *headers = headers_map->headers;
     Header *header = headers + header_index;
 
-    if (string_eq(header->field_name, field_name)) {
+    if (string_eq(header->field_name, name)) {
         return &header->field_value;
     }
 
@@ -1432,7 +1430,7 @@ static String *headers_get(Headers_Map *headers_map, String field_name) {
         }
 
         header = &headers[header_index];
-        if (string_eq(header->field_name, field_name)) {
+        if (string_eq(header->field_name, name)) {
             return &header->field_value;
         }
     }

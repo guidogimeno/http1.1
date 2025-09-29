@@ -230,3 +230,4 @@ void http_response_set_status(Response *response, u32 status);
 void http_response_add_header(Response *response, String key, String value);
 void http_response_write(Response *response, u8 *content, size_t size);
 
+String *http_headers_get(Headers_Map *headers_map, String name);
