@@ -27,8 +27,6 @@ static void foo_handler_0(Request *req, Response *res) {
 
     String body = string("{ \"CERO\": \"CERO\" }");
 
-    String query_param = http_get_query_param(req, string_lit("foo"));
-
     response_add_header(res, string_lit("hola"), string_lit("mundo"));
     response_set_status(res, 200);
 
@@ -40,10 +38,18 @@ static void foo_handler_1(Request *req, Response *res) {
 
     String body = string("{ \"UNO\": \"UNO\" }");
 
+    String query_param1 = http_get_query_param(req, string_lit("foo"));
+    printf("query_param: %.*s\n", string_print(query_param1));
+    String query_param2 = http_get_query_param(req, string_lit("bar"));
+
+    printf("query_param: %.*s\n", string_print(query_param2));
+
     response_add_header(res, string_lit("hola"), string_lit("mundo"));
     response_set_status(res, 200);
 
     response_write(res, allocator, (u8 *)body.data, body.size);
+
+    allocator_destroy(allocator);
 }
 
 static void foo_handler_2(Request *req, Response *res) {
@@ -91,6 +97,11 @@ static void foo_handler_5(Request *req, Response *res) {
     Allocator *allocator = allocator_make(1 * MB);
 
     String body = string("{ \"CINCO\": \"CINCO\" }");
+
+    String query_param1 = http_get_query_param(req, string_lit("foo"));
+    printf("query_param: %.*s\n", string_print(query_param1));
+    String query_param2 = http_get_query_param(req, string_lit("bar"));
+    printf("query_param: %.*s\n", string_print(query_param2));
 
     response_add_header(res, string_lit("hola"), string_lit("mundo"));
     response_set_status(res, 200);
@@ -151,6 +162,11 @@ static void foo_handler_10(Request *req, Response *res) {
     String foo = http_get_path_param(req, string("foo"));
     String bar = http_get_path_param(req, string("bar"));
     String baz = http_get_path_param(req, string("baz"));
+
+    String query_param1 = http_get_query_param(req, string_lit("foo"));
+    printf("query_param: %.*s\n", string_print(query_param1));
+    String query_param2 = http_get_query_param(req, string_lit("bar"));
+    printf("query_param: %.*s\n", string_print(query_param2));
 
     printf("GUIDO DEBUG: %.*s, %.*s, %.*s\n", 
             string_print(foo),

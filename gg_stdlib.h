@@ -71,6 +71,7 @@ Allocator *allocator_make(u64 capacity);
 void *allocator_alloc(Allocator *allocator, u64 size);
 void *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align);
 void allocator_reset(Allocator *allocator);
+void allocator_destroy(Allocator *allocator);
 
 Allocator_Temp allocator_temp_begin(Allocator *allocator);
 void allocator_temp_end(Allocator_Temp allocator_temp);
@@ -132,6 +133,10 @@ void *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align) {
 
 void allocator_reset(Allocator *allocator) {
     allocator->size = 0;
+}
+
+void allocator_destroy(Allocator *allocator) {
+    munmap(allocator, allocator->capacity);
 }
 
 Allocator_Temp allocator_temp_begin(Allocator *allocator) {
@@ -666,7 +671,4 @@ u64 hash_generic(void *data, size_t size) {
     }
     return hash;
 }
-
-
-
 
