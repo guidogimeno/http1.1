@@ -49,13 +49,12 @@ typedef struct Pattern_Parser Pattern_Parser;
 typedef struct Segment_Pattern Segment_Pattern;
 typedef struct Query_Param Query_Param;
 
-typedef enum Method Method;
 typedef enum Connection_State Connection_State;
 typedef enum Parse_Error Parse_Error;
 typedef enum Parser_State Parser_State;
 typedef enum Pattern_Parser_State Pattern_Parser_State;
 
-typedef void (Http_Handler)(Request *req, Response *res);
+typedef void Http_Handler(Request *req, Response *res);
 
 enum Parser_State {
     PARSER_STATE_STARTED,
@@ -150,16 +149,9 @@ struct Headers_Map {
     u32 capacity;
 };
 
-enum Method {
-    METHOD_GET,
-    METHOD_PUT,
-    METHOD_POST,
-    METHOD_DELETE
-};
-
 struct Body {
     u8 *data;
-    u32 length;
+    size_t size;
 };
 
 struct Query_Param {
@@ -227,6 +219,9 @@ struct Server {
 Server *http_server_make(Allocator *allocator);
 void http_server_handle(Server *server, char *pattern, Http_Handler *handler);
 i32 http_server_start(Server *server, u32 port, char *host);
-String http_get_path_param(Request *request, String name);
-String http_get_query_param(Request *request, String name);
+String http_request_path_param(Request *request, String name);
+String http_request_query_param(Request *request, String name);
+void http_response_set_status(Response *response, u32 status);
+void http_response_add_header(Response *response, String key, String value);
+void http_response_write(Response *response, u8 *content, size_t size);
 

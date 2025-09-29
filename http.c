@@ -39,9 +39,6 @@ static void request_add_segment_literal(Request *request, Allocator *allocator, 
 static void request_add_query_param(Request *request, Allocator *allocator, String key, String value);
 
 static void response_init(Response *response);
-static void response_set_status(Response *response, u32 status);
-static void response_add_header(Response *response, String key, String value);
-static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length);
 
 static void headers_init(Headers_Map *headers_map);
 static void headers_put(Headers_Map *headers_map, String field_name, String field_value);
@@ -57,25 +54,6 @@ Server *http_server_make(Allocator *allocator) {
     server->allocator = allocator;
 
     return server;
-}
-
-void print_segments(Segment_Pattern *s, u32 nivel) {
-
-    for (Segment_Pattern *segment = s;
-         segment != NULL;
-         segment = segment->next_segment) {
-
-        printf("%.*s \n", string_print(segment->segment));
-
-        if (segment->child_segments) {
-           
-            printf("empieza padre: %.*s nivel: %d \n", string_print(segment->segment), nivel + 1);
-            print_segments(segment->child_segments, nivel + 1);
-            printf("termina padre: %.*s nivel: %d \n", string_print(segment->segment), nivel + 1);
-
-        }
-
-    }
 }
 
 void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
@@ -98,10 +76,6 @@ void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
     parser.last_segment->handler = handler;
 
     patterns_tree_add(&server->patterns_tree, parser.first_segment);
-
-    // TODO: Borrar logs
-    print_segments(server->patterns_tree, 0);
-    printf("\n");
 }
 
 /*
@@ -250,7 +224,6 @@ static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *alloca
     } else {
         parser->last_segment->child_segments = segment_pattern;
     }
-
     parser->last_segment = segment_pattern;
 }
 
@@ -337,7 +310,7 @@ i32 http_server_start(Server *server, u32 port, char *host) {
  * En este caso el nombre de la variable seria "bar".
  * En caso de no encontrar el atributo, retorna un string vacio.
  */
-String http_get_path_param(Request *request, String name) {
+String http_request_get_path_param(Request *request, String name) {
     
     for (Segment_Pattern *segment = request->first_segment;
          segment != NULL;
@@ -354,7 +327,7 @@ String http_get_path_param(Request *request, String name) {
     return string_lit("");
 }
 
-String http_get_query_param(Request *request, String name) {
+String http_request_get_query_param(Request *request, String name) {
     for (Query_Param *qparam = request->first_query_param;
          qparam != NULL;
          qparam = qparam->next) {
@@ -545,15 +518,6 @@ static bool server_handle_connection(Server *server, Connection *connection) {
 
                 Http_Handler *handler = find_handler_while_adding_path_params(&request->first_segment,
                                                                               server->patterns_tree);
-                // printf("-----------------\n");
-                // for (Segment_Pattern *s = request->first_segment;
-                //     s != NULL;
-                //     s = s->next_segment) {
-                //     printf("segment: %.*s ", string_print(s->segment));
-                //     printf("is_path_param: %b ", s->is_path_param);
-                //     printf("path_param_name: %.*s\n", string_print(s->path_param_name));
-                // }
-                
                 if (handler) {
 
                     String *connection_value = headers_get(&request->headers_map, string_lit("connection"));
@@ -742,7 +706,7 @@ static Http_Handler *find_handler_while_adding_path_params(Segment_Pattern **req
 static i32 connection_write(Connection *connection, Response response) {
     Allocator *allocator = connection->allocator;
 
-    String content_lenght_value = string_from_int(allocator, response.body.length);
+    String content_lenght_value = string_from_int(allocator, response.body.size);
     String connection_value;
 
     if (connection->keep_alive) {
@@ -777,7 +741,7 @@ static String encode_response(Allocator *allocator, Response response) {
     String version = string_lit("HTTP/1.1 ");
     String status = string_from_int(allocator, response.status);
     String status_description = http_status_reason(response.status);
-    String body = string_with_len((char *)response.body.data, response.body.length);
+    String body = string_with_len((char *)response.body.data, response.body.size);
 
     // calculo de capacidad
     u32 response_minimum_size = version.size +
@@ -814,7 +778,7 @@ static String encode_response(Allocator *allocator, Response response) {
 
     sbuilder_append(&builder, line_separator);
 
-    if (response.body.length > 0) {
+    if (response.body.size > 0) {
         sbuilder_append(&builder, body);
     }
 
@@ -828,9 +792,9 @@ static i32 events_add_fd(i32 events_fd, i32 fd) {
     return kevent(events_fd, changelist, 1, NULL, 0, NULL);
 #else
     struct epoll_event event;
-    event.events = flags;
+    event.events = EPOLLIN;
     event.data.fd = fd;
-    return epoll_ctl(events_fd, EPOLL_CTL_ADD, fd, EPOLLIN);
+    return epoll_ctl(events_fd, EPOLL_CTL_ADD, fd, &event);
 #endif
 }
 
@@ -935,11 +899,9 @@ static Parser_Buffer *parser_push_buffer(Parser *parser) {
 
     if (parser->first_buffer == NULL && parser->last_buffer == NULL) {
         parser->first_buffer = new_buffer;
-        parser->last_buffer = new_buffer;
+    } else {
+        parser->last_buffer->next = new_buffer;
     }
-
-    // TODO: Esto no deberia estar en un else??? 
-    parser->last_buffer->next = new_buffer;
     parser->last_buffer = new_buffer;
 
     return new_buffer;
@@ -1196,7 +1158,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                 if (parser->body_size == 1) {
                     String body = parser_extract_block(parser, parser->at);
 
-                    request->body.length = body.size;
+                    request->body.size = body.size;
                     request->body.data = (u8 *)body.data;
 
                     parser->state = PARSER_STATE_FINISHED;
@@ -1223,7 +1185,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
                 String body = parser_extract_block(parser, parser->at);
 
-                request->body.length = body.size;
+                request->body.size = body.size;
                 request->body.data = (u8 *)body.data;
 
                 parser->state = PARSER_STATE_FINISHED;
@@ -1375,17 +1337,17 @@ static void response_init(Response *response) {
     headers_init(&response->headers);
 }
 
-static void response_set_status(Response *response, u32 status) {
+void http_response_set_status(Response *response, u32 status) {
     response->status = 200;
 }
 
-static void response_add_header(Response *response, String key, String value) {
+void http_response_add_header(Response *response, String key, String value) {
     headers_put(&response->headers, key, value);
 }
 
-static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length) {
+void http_response_write(Response *response, u8 *content, size_t size) {
     response->body.data = content;
-    response->body.length = length;
+    response->body.size = size;
 }
 
 static void headers_init(Headers_Map *headers_map) {
