@@ -12,6 +12,5 @@ typedef struct {
     String foo;
 } JSONString;
 
-void json_parse();
-void json_parse();
+void json_parse(char *json, size_t jsonc);
 

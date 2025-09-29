@@ -219,8 +219,13 @@ struct Server {
 Server *http_server_make(Allocator *allocator);
 void http_server_handle(Server *server, char *pattern, Http_Handler *handler);
 i32 http_server_start(Server *server, u32 port, char *host);
-String http_request_path_param(Request *request, String name);
-String http_request_query_param(Request *request, String name);
+
+Body http_request_get_body(Request *request);
+Headers_Map http_request_get_headers(Request *request);
+String http_request_get_header(Request *request, String name);
+String http_request_get_path_param(Request *request, String name);
+String http_request_get_query_param(Request *request, String name);
+
 void http_response_set_status(Response *response, u32 status);
 void http_response_add_header(Response *response, String key, String value);
 void http_response_write(Response *response, u8 *content, size_t size);

@@ -304,6 +304,22 @@ i32 http_server_start(Server *server, u32 port, char *host) {
     return EXIT_SUCCESS;
 }
 
+Body http_request_get_body(Request *request) {
+    return request->body;
+}
+
+String http_request_get_header(Request *request, String name) {
+    String *value = headers_get(&request->headers_map, name);
+    if (value) {
+        return *value;
+    }
+    return string_lit("");
+}
+
+Headers_Map http_request_get_headers(Request *request) {
+    return request->headers_map;
+}
+
 /*
  * Busca el path param en base al nombre de la variable definido en la URL
  * Ejemplo: `/foo/{bar}`
