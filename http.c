@@ -1,3 +1,53 @@
+// TODO:
+// Revisar por que en MAC se traba en cierto punto cuando mando muchos requests
+// Comando a probar: ab -k -c 10 -n 10000 http://127.0.0.1:8080/foo
+
+static i32 signals_init(void);
+static void signal_handler(i32 signal_number);
+static i32 start_listening(u32 port, char *host);
+static i32 set_nonblocking(i32 fd);
+
+static void server_accept_client(Server *server);
+static Connection *server_find_connection(Server *server, i32 fd);
+static Connection *server_find_free_connection(Server *server);
+static bool server_handle_connection(Server *server, Connection *connection);
+
+static void patterns_tree_add(Segment_Pattern **tree, Segment_Pattern *segment);
+static Http_Handler *find_handler_while_adding_path_params(Segment_Pattern **request_patterns,
+                                                           Segment_Pattern *server_patterns);
+static i32 events_add_fd(i32 events_fd, i32 fd);
+static i32 events_remove_fd(i32 events_fd, i32 fd);
+
+static void connection_init(Connection *connection, i32 fd, struct sockaddr_in address);
+static i32 connection_write(Connection *connection, Response response);
+
+static String encode_response(Allocator *allocator, Response response);
+
+static void parser_init(Parser *parser, Allocator *allocator);
+static char parser_get_char(Parser *parser);
+static Parser_Buffer *parser_push_buffer(Parser *parser);
+static u32 parser_parse_request(Parser *parser, Request *request);
+
+static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allocator, String pattern_str);
+static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param);
+
+static String http_status_reason(u16 status);
+
+static void request_init(Request *request);
+static void request_add_uri_segments(Request *request, Allocator *allocator, String uri);
+static void request_add_segment_literal(Request *request, Allocator *allocator, String literal);
+static void request_add_query_param(Request *request, Allocator *allocator, String key, String value);
+
+static void response_init(Response *response);
+static void response_set_status(Response *response, u32 status);
+static void response_add_header(Response *response, String key, String value);
+static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length);
+
+static void headers_init(Headers_Map *headers_map);
+static void headers_put(Headers_Map *headers_map, String field_name, String field_value);
+static String *headers_get(Headers_Map *headers_map, String field_name);
+
+
 static volatile bool main_running = true;
 
 Server *http_server_make(Allocator *allocator) {
@@ -210,56 +260,73 @@ i32 http_server_start(Server *server, u32 port, char *host) {
         return EXIT_FAILURE;
     }
 
-    i32 server_file_descriptor = start_listening(port, host);    
+    i32 server_fd = start_listening(port, host);    
 
-    i32 epoll_file_descriptor = epoll_create1(0);
-    if (epoll_file_descriptor == -1) {
+    i32 events_fd;
+#if OS_MAC
+    struct kevent eventlist[MAX_EVENTS];
+    events_fd = kqueue();
+#else
+    struct epoll_event epoll_events[MAX_EVENTS];
+    events_fd = epoll_create1(0);
+#endif
+
+    if (events_fd == -1) {
         return EXIT_FAILURE;
     }
 
-    if (epoll_events_add_file_descriptor(epoll_file_descriptor, server_file_descriptor, EPOLLIN) == -1) {
+    if (events_add_fd(events_fd, server_fd) == -1) {
+        perror("error al agregar server_fd al epoll events");
         return EXIT_FAILURE;
     }
-    
-    server->file_descriptor = server_file_descriptor;
-    server->epoll_file_descriptor = epoll_file_descriptor;
+
+    server->fd = server_fd;
+    server->events_fd = events_fd;
     server->connections_count = MAX_CONNECTIONS;
     server->connections = allocator_alloc(server->allocator, sizeof(Connection) * server->connections_count);
 
-    struct epoll_event epoll_events[MAX_EPOLL_EVENTS];
-
     while (main_running) {
 
-        i32 epoll_events_count = epoll_wait(epoll_file_descriptor, epoll_events, MAX_EPOLL_EVENTS, -1);
-        if (epoll_events_count == -1) {
+        i32 events_count;
+#if OS_MAC
+        events_count = kevent(events_fd, NULL, 0, eventlist, MAX_EVENTS,	NULL);
+#else
+        events_count = epoll_wait(events_fd, epoll_events, MAX_EVENTS, -1);
+#endif
+        if (events_count == -1) {
             continue;
         }
 
-        for (u32 i = 0; i < epoll_events_count; i++) {
+        for (u32 i = 0; i < events_count; i++) {
 
-            i32 event_file_descriptor = epoll_events[i].data.fd;
-            if (event_file_descriptor == server->file_descriptor) {
+            i32 event_fd;
+#if OS_MAC
+            event_fd = eventlist[i].ident;
+#else
+            event_fd = epoll_events[i].data.fd;
+#endif
+            if (event_fd == server->fd) {
                 server_accept_client(server);
                 continue;
             }
 
-            Connection *connection = server_find_connection(server, event_file_descriptor);
+            Connection *connection = server_find_connection(server, event_fd);
             if (connection == NULL) {
                 printf("error: no se logro encontrar la conexion\n");
-                epoll_events_remove_file_descriptor(epoll_file_descriptor, event_file_descriptor);
+                events_remove_fd(events_fd, event_fd);
                 continue;
             }
 
             bool remove_connection = server_handle_connection(server, connection);
             if (remove_connection) {
-                epoll_events_remove_file_descriptor(epoll_file_descriptor, connection->file_descriptor);
+                events_remove_fd(events_fd, connection->fd);
                 connection->is_active = false;
             }
         }
     }
 
-    close(server->epoll_file_descriptor);
-    close(server->file_descriptor);
+    close(server->events_fd);
+    close(server->fd);
 
     return EXIT_SUCCESS;
 }
@@ -288,6 +355,15 @@ String http_get_path_param(Request *request, String name) {
 }
 
 String http_get_query_param(Request *request, String name) {
+    for (Query_Param *qparam = request->first_query_param;
+         qparam != NULL;
+         qparam = qparam->next) {
+
+        if (string_eq(qparam->key, name)) {
+            return qparam->value;
+        }
+    }
+
     return string_lit("");
 }
 
@@ -318,15 +394,15 @@ static i32 signals_init(void) {
 
 static i32 start_listening(u32 port, char *host) {
     // creacion del socket
-    i32 file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
-    if (file_descriptor == -1) {
+    i32 fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == -1) {
         perror("error al crear socket");
         exit(EXIT_FAILURE);
     }
 
     // address reutilizable, no hace falta esperar al TIME_WAIT
     i32 reuse = 1;
-    if (setsockopt(file_descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == -1) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == -1) {
         perror("error al realizar setsockopt(SO_REUSEADDR)");
         exit(EXIT_FAILURE);
     }
@@ -338,13 +414,13 @@ static i32 start_listening(u32 port, char *host) {
         .sin_addr.s_addr = inet_addr(host),
     };
     
-    if (bind(file_descriptor, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+    if (bind(fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
         perror("error al realizar el bind");
         exit(EXIT_FAILURE);
     }
     
     // escuchar a traves del socket
-    if (listen(file_descriptor, MAX_CONNECTIONS) == -1) {
+    if (listen(fd, MAX_CONNECTIONS) == -1) {
         perror("error al realizar el listen");
         exit(EXIT_FAILURE);
     }
@@ -354,16 +430,16 @@ static i32 start_listening(u32 port, char *host) {
 
     printf("Servidor escuchando en: %.*s:%d\n", string_print(server_host), server_port);
 
-    return file_descriptor;
+    return fd;
 }
 
-static i32 set_nonblocking(i32 file_descriptor) {
-    i32 flags = fcntl(file_descriptor, F_GETFL);
+static i32 set_nonblocking(i32 fd) {
+    i32 flags = fcntl(fd, F_GETFL);
     if (flags == -1) {
         return -1;
     }
 
-    if (fcntl(file_descriptor, F_SETFL, flags | O_NONBLOCK) == -1) {
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
         return -1;
     }
 
@@ -375,7 +451,7 @@ static void server_accept_client(Server *server) {
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
 
-    i32 client_fd = accept(server->file_descriptor, (struct sockaddr *)&client_addr, &client_addr_len);
+    i32 client_fd = accept(server->fd, (struct sockaddr *)&client_addr, &client_addr_len);
     if (client_fd == -1) {
         perror("error al aceptar cliente");
         return;
@@ -394,7 +470,7 @@ static void server_accept_client(Server *server) {
         return;
     }
 
-    if (epoll_events_add_file_descriptor(server->epoll_file_descriptor, client_fd, EPOLLIN) == -1) {
+    if (events_add_fd(server->events_fd, client_fd) == -1) {
         perror("error al agregar client_fd al epoll events");
         close(client_fd);
         return;
@@ -407,9 +483,9 @@ static void server_accept_client(Server *server) {
 }
 
 
-static Connection *server_find_connection(Server *server, i32 file_descriptor) {
+static Connection *server_find_connection(Server *server, i32 fd) {
     for (u32 i = 0; i < server->connections_count; i++) {
-        if (server->connections[i].file_descriptor == file_descriptor) {
+        if (server->connections[i].fd == fd) {
             return &server->connections[i];
         }
     }
@@ -427,14 +503,14 @@ static Connection *server_find_free_connection(Server *server) {
     return NULL;
 }
 
-static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address) {
+static void connection_init(Connection *connection, i32 fd, struct sockaddr_in address) {
     if (connection->allocator == NULL) {
         connection->allocator = allocator_make(1 * MB);
     } else {
         allocator_reset(connection->allocator);
     }
 
-    connection->file_descriptor = file_descriptor;
+    connection->fd = fd;
     connection->state = CONNECTION_STATE_ACTIVE;
     connection->host = string(inet_ntoa(address.sin_addr));
     connection->port = ntohs(address.sin_port); 
@@ -454,7 +530,7 @@ static bool server_handle_connection(Server *server, Connection *connection) {
 
         Parser_Buffer *buffer = parser_push_buffer(parser); 
 
-        parser->bytes_read = read(connection->file_descriptor, buffer->data, buffer->size);
+        parser->bytes_read = read(connection->fd, buffer->data, buffer->size);
         if (parser->bytes_read < 0) {
             return true;
         }
@@ -523,7 +599,7 @@ static bool server_handle_connection(Server *server, Connection *connection) {
     }
 
     if (connection->keep_alive) {
-        connection_init(connection, connection->file_descriptor, connection->address);
+        connection_init(connection, connection->fd, connection->address);
         connection->keep_alive = true;
         return false;
     } 
@@ -680,7 +756,7 @@ static i32 connection_write(Connection *connection, Response response) {
 
     String encoded_response = encode_response(allocator, response);
 
-    i32 bytes_sent = write(connection->file_descriptor, encoded_response.data, encoded_response.size);
+    i32 bytes_sent = write(connection->fd, encoded_response.data, encoded_response.size);
 
     if (bytes_sent == -1) {
         return -1;
@@ -745,24 +821,27 @@ static String encode_response(Allocator *allocator, Response response) {
     return sbuilder_to_string(&builder);
 }
 
-
-static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events) {
-
+static i32 events_add_fd(i32 events_fd, i32 fd) {
+#if OS_MAC
+    struct kevent changelist[1];
+    EV_SET(changelist, fd, EVFILT_READ, EV_ADD|EV_ENABLE, 0, 0, 0);
+    return kevent(events_fd, changelist, 1, NULL, 0, NULL);
+#else
     struct epoll_event event;
-    event.events = epoll_events;
+    event.events = flags;
     event.data.fd = fd;
-    return epoll_ctl(epoll_file_descriptor, EPOLL_CTL_ADD, fd, &event);
+    return epoll_ctl(events_fd, EPOLL_CTL_ADD, fd, EPOLLIN);
+#endif
 }
 
-static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 file_descriptor) {
-
-    i32 res = epoll_ctl(epoll_file_descriptor, EPOLL_CTL_DEL, file_descriptor, 
-                        NULL);
+static i32 events_remove_fd(i32 events_fd, i32 fd) {
+#if !OS_MAC
+    i32 res = epoll_ctl(events_fd, EPOLL_CTL_DEL, fd, NULL);
     if (res == -1) {
         return -1;
     }
-
-    return close(file_descriptor);
+#endif
+    return close(fd);
 }
 
 static void parser_init(Parser *parser, Allocator * allocator) {
@@ -1248,7 +1327,6 @@ static void request_add_uri_segments(Request *request, Allocator *allocator, Str
 }
 
 static void request_add_query_param(Request *request, Allocator *allocator, String key, String value) {
-
     Query_Param *query_param = allocator_alloc(allocator, sizeof(Query_Param));
     *query_param = (Query_Param){0};
     query_param->next = NULL;
@@ -1264,7 +1342,6 @@ static void request_add_query_param(Request *request, Allocator *allocator, Stri
 }
 
 static void request_add_segment_literal(Request *request, Allocator *allocator, String literal) {
-
     Segment_Pattern *segment = allocator_alloc(allocator, sizeof(Segment_Pattern));
     *segment = (Segment_Pattern){0};
     segment->segment = literal;

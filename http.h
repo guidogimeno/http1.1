@@ -1,17 +1,38 @@
+#if defined(__linux__) || defined(__gnu_linux__)
+    #define OS_LINUX 1
+#elif defined(__APPLE__) && defined(__MACH__)
+    #define OS_MAC 1
+#else
+    #error Systema Operativo no soportado.
+#endif
+
+#if !defined(OS_LINUX)
+    #define OS_LINUX 0
+#endif
+#if !defined(OS_MAC)
+    #define OS_MAC 0
+#endif
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#if OS_MAC
+#include <sys/types.h>
+#include <sys/event.h>
+#else
+#include <sys/epoll.h>
+#endif
 
 #define HTTP_VERSION_10 string_lit("HTTP/1.0")
 #define HTTP_VERSION_11 string_lit("HTTP/1.1")
 
-#define MAX_CONNECTIONS 1024
-#define MAX_EPOLL_EVENTS 256
+#define MAX_CONNECTIONS 512
+#define MAX_EVENTS 100
 #define MAX_PARSER_BUFFER_CAPACITY 4
 #define MAX_HEADERS_CAPACITY 32
 
@@ -177,7 +198,7 @@ struct Connection {
 
     Connection_State state;
 
-    i32 file_descriptor;
+    i32 fd;
     String host;
     u16 port;
     struct sockaddr_in address;
@@ -193,9 +214,9 @@ struct Connection {
 struct Server {
     Allocator *allocator;
 
-    i32 file_descriptor;
+    i32 fd;
 
-    i32 epoll_file_descriptor;
+    i32 events_fd;
 
     u32 connections_count;
     Connection *connections;
@@ -208,50 +229,4 @@ void http_server_handle(Server *server, char *pattern, Http_Handler *handler);
 i32 http_server_start(Server *server, u32 port, char *host);
 String http_get_path_param(Request *request, String name);
 String http_get_query_param(Request *request, String name);
-
-static i32 signals_init(void);
-static void signal_handler(i32 signal_number);
-static i32 start_listening(u32 port, char *host);
-static i32 set_nonblocking(i32 file_descriptor);
-
-static void server_accept_client(Server *server);
-static Connection *server_find_connection(Server *server, i32 file_descriptor);
-static Connection *server_find_free_connection(Server *server);
-static bool server_handle_connection(Server *server, Connection *connection);
-
-static void patterns_tree_add(Segment_Pattern **tree, Segment_Pattern *segment);
-static Http_Handler *find_handler_while_adding_path_params(Segment_Pattern **request_patterns,
-                                                           Segment_Pattern *server_patterns);
-
-static i32 epoll_events_add_file_descriptor(i32 epoll_file_descriptor, i32 fd, u32 epoll_events);
-static i32 epoll_events_remove_file_descriptor(i32 epoll_file_descriptor, i32 file_descriptor);
-
-static void connection_init(Connection *connection, i32 file_descriptor, struct sockaddr_in address);
-static i32 connection_write(Connection *connection, Response response);
-
-static String encode_response(Allocator *allocator, Response response);
-
-static void parser_init(Parser *parser, Allocator *allocator);
-static char parser_get_char(Parser *parser);
-static Parser_Buffer *parser_push_buffer(Parser *parser);
-static u32 parser_parse_request(Parser *parser, Request *request);
-
-static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allocator, String pattern_str);
-static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param);
-
-static String http_status_reason(u16 status);
-
-static void request_init(Request *request);
-static void request_add_uri_segments(Request *request, Allocator *allocator, String uri);
-static void request_add_segment_literal(Request *request, Allocator *allocator, String literal);
-static void request_add_query_param(Request *request, Allocator *allocator, String key, String value);
-
-static void response_init(Response *response);
-static void response_set_status(Response *response, u32 status);
-static void response_add_header(Response *response, String key, String value);
-static void response_write(Response *response, Allocator *allocator, u8 *content, u32 length);
-
-static void headers_init(Headers_Map *headers_map);
-static void headers_put(Headers_Map *headers_map, String field_name, String field_value);
-static String *headers_get(Headers_Map *headers_map, String field_name);
 
