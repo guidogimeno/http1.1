@@ -16,8 +16,12 @@ typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
 
+typedef int32_t b32;
+typedef int64_t b64;
+
 typedef float  f32;
 typedef double f64;
+
 
 #define KB 1024
 #define MB 1024 * KB
@@ -546,6 +550,10 @@ char char_to_upper(char c) {
 bool is_letter(char ch) {
     return (ch >= 'a' && ch <= 'z') ||
         (ch >= 'A' && ch <= 'Z');
+}
+
+bool is_digit(char ch) {
+    return (ch >= '0' && ch <= '9');
 }
 
 bool is_alphanum(char ch) {
