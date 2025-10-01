@@ -1,0 +1,121 @@
+{
+  "primitives": {
+    "simple_string": "hello world",
+    "null": null,
+    "true": true,
+    "false": false,
+    "empty_string": "",
+    "integer": 42,
+    "negative_integer": -42,
+    "zero": 0,
+    "float": 3.14159,
+    "negative_float": -3.14159,
+  },
+  "arrays": {
+    "empty": [],
+    "single_primitive": [null],
+    "mixed_primitives": [true, false, 1, "two", null],
+    "nested_array": [[[[42]]]],
+    "mixed_nested": [1, [2, 3], {"key": 4}, null],
+    "long_array": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  },
+  "objects": {
+    "empty": {},
+    "single_pair": {"key": "value"},
+    "mixed_values": {
+      "bool": true,
+      "num": 123,
+      "str": "string",
+      "null": null,
+      "array": [1, 2, 3],
+      "nested_obj": {"inner": "value"}
+    },
+    "deeply_nested": {
+      "level1": {
+        "level2": {
+          "level3": {
+            "leaf": 42
+          }
+        }
+      }
+    },
+    "with_arrays": {
+      "items": [
+        {"id": 1, "name": "A"},
+        {"id": 2, "name": "B"}
+      ]
+    },
+    "duplicate_keys": {
+      "key": "first",
+      "key": "second"
+    }
+  },
+  "combinations": {
+    "object_in_array": [
+      {"type": "obj", "value": {"nested": true}},
+      null,
+      [1, 2]
+    ],
+    "array_in_object": {
+      "outer": {
+        "inner_array": [[true, false], ["hello", null]],
+        "primitives": [42, "world"]
+      }
+    },
+    "complex_structure": {
+      "root": {
+        "metadata": {
+          "version": 1.0,
+          "enabled": true,
+          "tags": ["json", "test"]
+        },
+        "data": [
+          {
+            "id": 1,
+            "name": "Item 1",
+            "active": false,
+            "details": {
+              "price": 9.99,
+              "currency": "USD",
+              "options": [null, "option1", {"extra": 42}]
+            }
+          },
+          {
+            "id": 2,
+            "name": "Item 2",
+            "active": true,
+            "details": null
+          }
+        ],
+        "summary": {
+          "total": 19.98,
+          "items": 2,
+          "empty": {}
+        }
+      }
+    },
+    "edge_cases": {
+      "max_depth": {
+        "a": {
+          "b": {
+            "c": {
+              "d": {
+                "e": {
+                  "f": {
+                    "g": {
+                      "h": {
+                        "i": {
+                          "j": null
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+    }
+  }
+}

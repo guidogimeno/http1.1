@@ -441,6 +441,11 @@ i64 string_to_int(String str) {
     return result * sign;
 }
 
+f64 string_to_float(String str) {
+    // TODO: ver como hacer esto
+    return 0;
+}
+
 String string_from_int(Allocator *allocator, i64 num) {
     static const u64 powers_of_10[] = {
         1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL,
