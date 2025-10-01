@@ -107,6 +107,7 @@ static JSON_Token json_get_token(JSON_Parser *parser) {
 
                 parser->at++;
 
+                // TODO: soportar exponenciales positivos y negativos (1e3, 1e-3, -1e-3)
                 while (parser->at < parser->json_str.size &&
                         (is_digit(parser->json_str.data[parser->at]) || 
                          parser->json_str.data[parser->at] == '.')) {
@@ -128,119 +129,125 @@ static JSON_Token json_get_token(JSON_Parser *parser) {
     return token;
 }
 
-// static void json_object_add_pair(Allocator *allocator, Object *object, String key, JSON_Element element) {
-//     JSON_Pair *pair = allocator_alloc(allocator, sizeof(JSON_Pair));
-//     pair->key = key;
-//     pair->element = element;
-//     pair->next = NULL;
-//
-//     if (object->first_pair == NULL && object->last_pair == NULL) {
-//         object->first_pair = pair;
-//     } else {
-//         object->last_pair->next = pair;
-//     }
-//     object->last_pair = pair;
-// }
+static void json_object_add_pair(Allocator *allocator, JSON_Object *object, String key, JSON_Element *element) {
+    JSON_Pair *pair = allocator_alloc(allocator, sizeof(JSON_Pair));
+    pair->key = key;
+    pair->element = element;
+    pair->next = NULL;
 
-// static JSON_Object *json_parse_object(JSON_Parser *parser, Allocator *allocator) {
-//     JSON_Object *object = allocator_alloc(allocator, sizeof(JSON_Object));
-//     JSON_Element element;
-//
-//     do {
-//         JSON_Token token_key = json_get_token(parser);
-//         if (token_key.type != JSON_TOKEN_STRING) {
-//             printf("Error. Esperaba un String y recibi: %d, %.*s\n", token.type, string_print(token.value));
-//             return;
-//         }
-//
-//         JOSN_Token token_colon = json_get_token(parser);
-//         if (token_colon.type != JSON_TOKEN_COLON) {
-//             printf("Error. Esperaba un ':' y recibi: %d, %.*s\n", token.type, string_print(token.value));
-//             return;
-//         }
-//        
-//         JSON_Token token_value = json_get_token(parser);
-//         switch (token_value.type) {
-//             case JSON_TOKEN_STRING: {
-//                 element.type = JSON_TYPE_STRING;
-//                 element.value.string = token_value.value;
-//                 break;
-//             }
-//             case JSON_TOKEN_NUMBER: {
-//                 element.type = JSON_TYPE_NUMBER;
-//                 element.value.number = string_to_float(token_value.value);
-//                 break;
-//             }
-//             case JSON_TOKEN_NULL: {
-//                 element.type = JSON_TYPE_NULL;
-//                 element.value.null = NULL;
-//                 break;
-//             }
-//             case JSON_TOKEN_BOOLEAN: {
-//                 element.type = JSON_TYPE_NUMBER;
-//                 element.value.boolean = *token_value.value.data == 't' ? true : false;
-//                 break;
-//             }
-//             case JSON_TOKEN_OPEN_BRACE: {
-//                 element.type = JSON_TYPE_OBJECT;
-//                 element.value.object = *json_parse_object(parser, allocator); 
-//                 break;
-//             }
-//             case JSON_TOKEN_OPEN_BRACKET: {
-//                 element.type = JSON_TYPE_ARRAY;
-//                 // element.value.array = json_parse_object(parser, allocator);  // TODO: json_parse_array(parser, allocator);
-//                 break;
-//             }
-//             default: { 
-//                 printf("Error. Recibi: %d, %.*s\n", token.type, string_print(token.value));
-//                 break; 
-//             }
-//         }
-//
-//         json_object_add_pair(allocator, object, token_key.value, element);
-//
-//     } while (token.type == JSON_TOKEN_COMMA);
-//
-//     if (token.type != JSON_TOKEN_CLOSE_BRACE) {
-//         printf("Error. Esperaba un '}' y recibi: %d, %.*s\n", token.type, string_print(token.value));
-//     }
-//
-//     return object;
-// }
+    if (object->first_pair == NULL && object->last_pair == NULL) {
+        object->first_pair = pair;
+    } else {
+        object->last_pair->next = pair;
+    }
+    object->last_pair = pair;
+}
+
+static JSON_Object *json_parse_object(JSON_Parser *parser, Allocator *allocator) {
+    JSON_Object *object = allocator_alloc(allocator, sizeof(JSON_Object));
+    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+
+    JSON_Token token_key;
+
+    do {
+        token_key = json_get_token(parser);
+        if (token_key.type != JSON_TOKEN_STRING) {
+            printf("Error. Esperaba un String y recibi: %s, %.*s\n", detalles[token_key.type], string_print(token_key.value));
+            return NULL;
+        }
+
+        JSON_Token token_colon = json_get_token(parser);
+        if (token_colon.type != JSON_TOKEN_COLON) {
+            printf("Error. Esperaba un ':' y recibi: %s, %.*s\n", detalles[token_colon.type], string_print(token_colon.value));
+            return NULL;
+        }
+       
+        JSON_Token token_value = json_get_token(parser);
+        switch (token_value.type) {
+            case JSON_TOKEN_STRING: {
+                element->type = JSON_TYPE_STRING;
+                element->value.string = token_value.value;
+                break;
+            }
+            case JSON_TOKEN_NUMBER: {
+                element->type = JSON_TYPE_NUMBER;
+                element->value.number = string_to_float(token_value.value);
+                break;
+            }
+            case JSON_TOKEN_NULL: {
+                element->type = JSON_TYPE_NULL;
+                element->value.null = NULL;
+                break;
+            }
+            case JSON_TOKEN_BOOLEAN: {
+                element->type = JSON_TYPE_NUMBER;
+                element->value.boolean = *token_value.value.data == 't' ? true : false;
+                break;
+            }
+            case JSON_TOKEN_OPEN_BRACE: {
+                element->type = JSON_TYPE_OBJECT;
+                element->value.object = *json_parse_object(parser, allocator); 
+                break;
+            }
+            case JSON_TOKEN_OPEN_BRACKET: {
+                element->type = JSON_TYPE_ARRAY;
+                // element->value.array = json_parse_object(parser, allocator);  // TODO: json_parse_array(parser, allocator);
+                break;
+            }
+            default: { 
+                printf("Error. Recibi: %s, %.*s\n", detalles[token_value.type], string_print(token_value.value));
+                return NULL;
+            }
+        }
+
+        json_object_add_pair(allocator, object, token_key.value, element);
+
+    } while (token_key.type == JSON_TOKEN_COMMA);
+
+    if (token_key.type != JSON_TOKEN_CLOSE_BRACE) {
+        printf("Error. Esperaba un '}' y recibi: %s, %.*s\n", detalles[token_key.type], string_print(token_key.value));
+        return NULL;
+    }
+
+    return object;
+}
 
 JSON_Parser_State json_parse(String json_str, JSON_Element *json) {
-    // Allocator *allocator = allocator_make(1 * MB);
+    Allocator *allocator = allocator_make(1 * MB);
 
     JSON_Parser parser = {0};
     parser.json_str = json_str;
 
-    JSON_Token token;
-    do {
-        token = json_get_token(&parser);
-        printf("Token Type: %s\nToken Value:%.*s\n\n", detalles[token.type], string_print(token.value));
-    } while (token.type != JSON_TOKEN_EOF && token.type != JSON_TOKEN_UNKNOWN);
+    // JSON_Token token;
+    // do {
+    //     token = json_get_token(&parser);
+    //     printf("Token Type: %s\nToken Value:%.*s\n\n", detalles[token.type], string_print(token.value));
+    // } while (token.type != JSON_TOKEN_EOF && token.type != JSON_TOKEN_UNKNOWN);
 
-    // JSON_Token token = json_get_token(&parser);
-    // switch (token.type) {
-    //     case JSON_TOKEN_EOF: {
-    //         printf("EOF\n");
-    //         break;
-    //     }
-    //     case JSON_TOKEN_UNKNOWN: {
-    //         printf("Token desconocido: %.*s\n", string_print(token.value));
-    //         break;
-    //     }
-    //     case JSON_TOKEN_OPEN_BRACKET: {
-    //        
-    //         break;
-    //     }
-    //     case JSON_TOKEN_OPEN_BRACE: {
-    //         parser->json.type = JSON_TYPE_OBJECT;
-    //         parser->json.value.object = *json_parse_object(&parser, allocator);
-    //
-    //         break;
-    //     }
-    // }
+    JSON_Token token = json_get_token(&parser);
+    switch (token.type) {
+        default: {
+            printf("No implementado: %s, %.*s\n", detalles[token.type], string_print(token.value));
+            break;
+        }
+        case JSON_TOKEN_EOF: {
+            printf("EOF\n");
+            break;
+        }
+        case JSON_TOKEN_UNKNOWN: {
+            printf("Token desconocido: %.*s\n", string_print(token.value));
+            break;
+        }
+        case JSON_TOKEN_OPEN_BRACKET: {
+           
+            break;
+        }
+        case JSON_TOKEN_OPEN_BRACE: {
+            parser.json.type = JSON_TYPE_OBJECT;
+            parser.json.value.object = *json_parse_object(&parser, allocator);
+            break;
+        }
+    }
 
     return JSON_STATUS_SUCCESS;
 };
@@ -249,5 +256,4 @@ JSON_Parser_State json_parse_cstr(char *json_cstr, size_t json_size, JSON_Elemen
     String json_str = string_with_len(json_cstr, json_size);
     return json_parse(json_str, json);
 };
-
 

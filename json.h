@@ -12,53 +12,49 @@ typedef enum JSON_Token_Type JSON_Token_Type;
 
 typedef union JSON_Value JSON_Value;
 
-// struct JSON_Pair {
-//     JSON_Pair *next;
-//
-//     String key;
-//     JSON_Element element;
-// };
-//
-// struct JSON_Object{
-//     JSON_Pair *first_pair;
-//     JSON_Pair *last_pair;
-// };
+struct JSON_Pair {
+    JSON_Pair *next;
 
-// enum JSON_Type {
-//     JSON_TYPE_OBJECT,
-//     JSON_TYPE_ARRAY,
-//     JSON_TYPE_PAIR,
-//     JSON_TYPE_NUMBER,
-//     JSON_TYPE_STRING,
-//     JSON_TYPE_BOOLEAN,
-//     JSON_TYPE_NULL
-// };
-//
-// union JSON_Value{
-//     JSON_Object object;
-//     JSON_Array array;
-//     JSON_String string;
-//     f64 number;
-//     b32 boolean;
-//     void *null;
-// };
-//
+    String key;
+    JSON_Element *element;
+};
+
+struct JSON_Object {
+    JSON_Pair *first_pair;
+    JSON_Pair *last_pair;
+};
+
+struct JSON_Array {
+    JSON_Element *elements;
+};
+
+enum JSON_Type {
+    JSON_TYPE_OBJECT,
+    JSON_TYPE_ARRAY,
+    JSON_TYPE_PAIR,
+    JSON_TYPE_NUMBER,
+    JSON_TYPE_STRING,
+    JSON_TYPE_BOOLEAN,
+    JSON_TYPE_NULL
+};
+
+union JSON_Value{
+    JSON_Object object;
+    JSON_Array array;
+    String string;
+    f64 number;
+    b32 boolean;
+    void *null;
+};
+
 struct JSON_Element {
     JSON_Element *child;
     JSON_Element *next;
     JSON_Element *prev;
 
-    // JSON_Type type;
-    // JSON_Value value;
+    JSON_Type type;
+    JSON_Value value;
 };
-//
-// struct JSON_Array{
-//     char *elements;
-// };
-//
-// struct JSON_String{
-//     String value;
-// };
 
 enum JSON_Parser_State{
     JSON_STATUS_SUCCESS,
@@ -87,6 +83,7 @@ enum JSON_Token_Type {
     JSON_TOKEN_EOF
 };
 
+// TODO: Borrar
 char *detalles[12] = {
     "OPEN_BRACE",
     "CLOSE_BRACE",
