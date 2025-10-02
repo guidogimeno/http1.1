@@ -132,6 +132,53 @@ static JSON_Token json_get_token(JSON_Parser *parser) {
     return token;
 }
 
+static bool json_require_token(JSON_Parser *parser, JSON_Token_Type type) {
+    JSON_Token token = json_get_token(parser);
+    if (token.type == type) {
+        return true;
+    } else {
+        parser->state = JSON_STATUS_FAILED;
+        return false;
+    }
+}
+
+static void json_parse_element_value(JSON_Parser *parser, Allocator *allocator, JSON_Element *element, JSON_Token token) {
+    switch (token.type) {
+        case JSON_TOKEN_STRING: {
+            element->type = JSON_TYPE_STRING;
+            element->value.string = token.value;
+            break;
+        }
+        case JSON_TOKEN_NUMBER: {
+            element->type = JSON_TYPE_NUMBER;
+            element->value.number = string_to_float(token.value);
+            break;
+        }
+        case JSON_TOKEN_NULL: {
+            element->type = JSON_TYPE_NULL;
+            element->value.null = NULL;
+            break;
+        }
+        case JSON_TOKEN_BOOLEAN: {
+            element->type = JSON_TYPE_NUMBER;
+            element->value.boolean = *token.value.data == 't' ? true : false;
+            break;
+        }
+        case JSON_TOKEN_OPEN_BRACE: {
+            json_parse_object(parser, allocator, element);
+            break;
+        }
+        case JSON_TOKEN_OPEN_BRACKET: {
+            json_parse_array(parser, allocator, element);
+            break;
+        }
+        default: { 
+            parser->state = JSON_STATUS_FAILED;
+            break;
+        }
+    }
+}
+
 static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Element *parent) {
     parent->type = JSON_TYPE_ARRAY;
 
@@ -146,40 +193,7 @@ static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Ele
         JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
         *element = (JSON_Element){0};
 
-        switch (token.type) {
-            case JSON_TOKEN_STRING: {
-                element->type = JSON_TYPE_STRING;
-                element->value.string = token.value;
-                break;
-            }
-            case JSON_TOKEN_NUMBER: {
-                element->type = JSON_TYPE_NUMBER;
-                element->value.number = string_to_float(token.value);
-                break;
-            }
-            case JSON_TOKEN_NULL: {
-                element->type = JSON_TYPE_NULL;
-                element->value.null = NULL;
-                break;
-            }
-            case JSON_TOKEN_BOOLEAN: {
-                element->type = JSON_TYPE_NUMBER;
-                element->value.boolean = *token.value.data == 't' ? true : false;
-                break;
-            }
-            case JSON_TOKEN_OPEN_BRACE: {
-                json_parse_object(parser, allocator, element);
-                break;
-            }
-            case JSON_TOKEN_OPEN_BRACKET: {
-                json_parse_array(parser, allocator, element);
-                break;
-            }
-            default: { 
-                parser->state = JSON_STATUS_FAILED;
-                break;
-            }
-        }
+        json_parse_element_value(parser, allocator, element, token);
 
         if (parser->state == JSON_STATUS_FAILED) {
             break;
@@ -225,48 +239,13 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
         JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
         *element = (JSON_Element){0};
         element->name = element_name;
-
-        JSON_Token token_colon = json_get_token(parser);
-        if (token_colon.type != JSON_TOKEN_COLON) {
-            parser->state = JSON_STATUS_FAILED;
+        
+        if (!json_require_token(parser, JSON_TOKEN_COLON)) {
             break;
         }
 
         JSON_Token token_value = json_get_token(parser);
-        switch (token_value.type) {
-            case JSON_TOKEN_STRING: {
-                element->type = JSON_TYPE_STRING;
-                element->value.string = token_value.value;
-                break;
-            }
-            case JSON_TOKEN_NUMBER: {
-                element->type = JSON_TYPE_NUMBER;
-                element->value.number = string_to_float(token_value.value);
-                break;
-            }
-            case JSON_TOKEN_NULL: {
-                element->type = JSON_TYPE_NULL;
-                element->value.null = NULL;
-                break;
-            }
-            case JSON_TOKEN_BOOLEAN: {
-                element->type = JSON_TYPE_NUMBER;
-                element->value.boolean = *token_value.value.data == 't' ? true : false;
-                break;
-            }
-            case JSON_TOKEN_OPEN_BRACE: {
-                json_parse_object(parser, allocator, element);
-                break;
-            }
-            case JSON_TOKEN_OPEN_BRACKET: {
-                json_parse_array(parser, allocator, element);
-                break;
-            }
-            default: { 
-                parser->state = JSON_STATUS_FAILED;
-                break;
-            }
-        }
+        json_parse_element_value(parser, allocator, element, token_value);
 
         if (parser->state == JSON_STATUS_FAILED) {
             break;
