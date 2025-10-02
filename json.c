@@ -179,6 +179,10 @@ static void json_parse_element_value(JSON_Parser *parser, Allocator *allocator, 
     }
 }
 
+static void json_element_init(JSON_Element *element) {
+    *element = (JSON_Element){0};
+}
+
 static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Element *parent) {
     parent->type = JSON_TYPE_ARRAY;
 
@@ -191,7 +195,7 @@ static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Ele
 
     while (true) {
         JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
-        *element = (JSON_Element){0};
+        json_element_init(element);
 
         json_parse_element_value(parser, allocator, element, token);
 
@@ -223,13 +227,13 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
     parent->type = JSON_TYPE_OBJECT;
 
     JSON_Element *current = parent->child;
-    String element_name;
+    String element_key;
 
     JSON_Token token_key = json_get_token(parser);
     if (token_key.type == JSON_TOKEN_CLOSE_BRACE) {
         return;
     } else if (token_key.type == JSON_TOKEN_STRING) {
-        element_name = token_key.value;
+        element_key = token_key.value;
     } else {
         parser->state = JSON_STATUS_FAILED;
         return;
@@ -237,8 +241,8 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
 
     while (true) {
         JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
-        *element = (JSON_Element){0};
-        element->name = element_name;
+        json_element_init(element);
+        element->key = element_key;
         
         if (!json_require_token(parser, JSON_TOKEN_COLON)) {
             break;
@@ -269,7 +273,7 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
 
         token_key = json_get_token(parser);
         if (token_key.type == JSON_TOKEN_STRING) {
-            element_name = token_key.value;
+            element_key = token_key.value;
         } else {
             parser->state = JSON_STATUS_FAILED;
             break;
@@ -282,20 +286,15 @@ JSON_Parser_State json_parse(Allocator *allocator, String json_str, JSON_Element
     parser.state = JSON_STATUS_SUCCESS;
     parser.json_str = json_str;
 
+    json_element_init(json);
+
     JSON_Token token = json_get_token(&parser);
-    switch (token.type) {
-        case JSON_TOKEN_OPEN_BRACKET: {
-            json_parse_array(&parser, allocator, json);
-            break;
-        }
-        case JSON_TOKEN_OPEN_BRACE: {
-            json_parse_object(&parser, allocator, json);
-            break;
-        }
-        default: {
-            parser.state = JSON_STATUS_FAILED;
-            break;
-        }
+    if (token.type == JSON_TOKEN_OPEN_BRACKET) {
+        json_parse_array(&parser, allocator, json);
+    } else if (token.type == JSON_TOKEN_OPEN_BRACE) {
+        json_parse_object(&parser, allocator, json);
+    } else {
+        parser.state = JSON_STATUS_FAILED;
     }
 
     return parser.state;

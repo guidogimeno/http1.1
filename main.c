@@ -103,27 +103,27 @@ static void print_json(JSON_Element *element) {
 
         switch (el->type) {
             case JSON_TYPE_STRING: {
-                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
                 printf("%.*s ", string_print(el->value.string));
                 break;
             }
             case JSON_TYPE_NUMBER: {
-                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
                 printf("%f ", el->value.number);
                 break;
             }
             case JSON_TYPE_NULL: {
-                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
                 printf("%s ", "NULL");
                 break;
             }
             case JSON_TYPE_BOOLEAN: {
-                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
                 printf("%d ", el->value.boolean);
                 break;
             }
             case JSON_TYPE_OBJECT: {
-                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
                 printf("{ ");
                 if (el->child) {
                     print_json(el->child);
@@ -132,7 +132,7 @@ static void print_json(JSON_Element *element) {
                 break;
             }
             case JSON_TYPE_ARRAY: {
-                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
                 printf("[ ");
                 if (el->child) {
                     print_json(el->child);
@@ -154,7 +154,7 @@ int main(int argc, char *argv[], char *env[]) {
 
     Allocator *allocator = allocator_make(1 * MB);
 
-    JSON_Element element = {0};
+    JSON_Element element;
     json_parse(allocator, json_str, &element);
 
     print_json(&element);

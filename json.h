@@ -10,7 +10,6 @@ typedef enum JSON_Token_Type JSON_Token_Type;
 enum JSON_Type {
     JSON_TYPE_OBJECT,
     JSON_TYPE_ARRAY,
-    JSON_TYPE_PAIR,
     JSON_TYPE_NUMBER,
     JSON_TYPE_STRING,
     JSON_TYPE_BOOLEAN,
@@ -30,15 +29,14 @@ struct JSON_Element {
     JSON_Element *prev;
 
     JSON_Type type;
-    JSON_Value value;
 
-    String name; // Exclusivo de los JSON_TYPE_OBJECT
+    String key; // Exclusivo de los JSON_TYPE_OBJECT
+    JSON_Value value;
 };
 
 enum JSON_Parser_State{
     JSON_STATUS_FAILED,
-    JSON_STATUS_SUCCESS,
-    JSON_STATUS_PARSING
+    JSON_STATUS_SUCCESS
 };
 
 struct JSON_Parser {

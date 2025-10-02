@@ -99,9 +99,9 @@ struct Segment_Pattern {
     Segment_Pattern *child_segments;
 
     String segment;
-    String path_param_name;
 
     bool is_path_param;
+    String path_param_name;
 };
 
 struct Pattern_Parser {
