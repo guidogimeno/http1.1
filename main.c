@@ -93,16 +93,71 @@ char* read_file_to_string(const char* filename) {
     return buffer;
 }
 
+
+static void print_json(JSON_Element *element);
+
+static void print_json(JSON_Element *element) {
+    for (JSON_Element *el = element;
+        el != NULL;
+        el = el->next) {
+
+        switch (el->type) {
+            case JSON_TYPE_STRING: {
+                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                printf("%.*s ", string_print(el->value.string));
+                break;
+            }
+            case JSON_TYPE_NUMBER: {
+                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                printf("%f ", el->value.number);
+                break;
+            }
+            case JSON_TYPE_NULL: {
+                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                printf("%s ", "NULL");
+                break;
+            }
+            case JSON_TYPE_BOOLEAN: {
+                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                printf("%d ", el->value.boolean);
+                break;
+            }
+            case JSON_TYPE_OBJECT: {
+                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                printf("{ ");
+                if (el->child) {
+                    print_json(el->child);
+                }
+                printf("} ");
+                break;
+            }
+            case JSON_TYPE_ARRAY: {
+                if (el->name.size > 0) printf("%.*s: ", string_print(el->name));
+                printf("[ ");
+                if (el->child) {
+                    print_json(el->child);
+                }
+                printf("] ");
+                break;
+            }
+            default: { 
+            }
+        }
+    }
+}
+
 int main(int argc, char *argv[], char *env[]) {
     set_process_name(argc, argv, env, "HTTP_SERVER_GG");
 
-    char *content = read_file_to_string("test.json");
-
-    JSON_Element element;
+    char *content = read_file_to_string("copy.json");
     String json_str = string(content);
-    json_parse(json_str, &element);
 
-    Allocator *allocator = allocator_make(8 * MB);
+    Allocator *allocator = allocator_make(1 * MB);
+
+    JSON_Element element = {0};
+    json_parse(allocator, json_str, &element);
+
+    print_json(&element);
 
     Server *server = http_server_make(allocator);
 

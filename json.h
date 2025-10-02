@@ -1,32 +1,11 @@
 typedef struct JSON_Element JSON_Element;
-typedef struct JSON_Pair JSON_Pair;
-typedef struct JSON_Object JSON_Object;
-typedef struct JSON_Array JSON_Array;
-typedef struct JSON_String JSON_String;
-typedef struct JSON_Parser JSON_Parser;
-typedef struct JSON_Token JSON_Token;
-
 typedef enum JSON_Type JSON_Type;
-typedef enum JSON_Parser_State JSON_Parser_State;
-typedef enum JSON_Token_Type JSON_Token_Type;
-
 typedef union JSON_Value JSON_Value;
 
-struct JSON_Pair {
-    JSON_Pair *next;
-
-    String key;
-    JSON_Element *element;
-};
-
-struct JSON_Object {
-    JSON_Pair *first_pair;
-    JSON_Pair *last_pair;
-};
-
-struct JSON_Array {
-    JSON_Element *elements;
-};
+typedef struct JSON_Parser JSON_Parser;
+typedef enum JSON_Parser_State JSON_Parser_State;
+typedef struct JSON_Token JSON_Token;
+typedef enum JSON_Token_Type JSON_Token_Type;
 
 enum JSON_Type {
     JSON_TYPE_OBJECT,
@@ -39,8 +18,6 @@ enum JSON_Type {
 };
 
 union JSON_Value{
-    JSON_Object object;
-    JSON_Array array;
     String string;
     f64 number;
     b32 boolean;
@@ -54,18 +31,20 @@ struct JSON_Element {
 
     JSON_Type type;
     JSON_Value value;
+
+    String name; // Exclusivo de los JSON_TYPE_OBJECT
 };
 
 enum JSON_Parser_State{
+    JSON_STATUS_FAILED,
     JSON_STATUS_SUCCESS,
-    JSON_STATUS_FAILED
+    JSON_STATUS_PARSING
 };
 
 struct JSON_Parser {
     JSON_Parser_State state;
     String json_str;
     u32 at;
-    JSON_Element json;
 };
 
 enum JSON_Token_Type {
@@ -83,27 +62,11 @@ enum JSON_Token_Type {
     JSON_TOKEN_EOF
 };
 
-// TODO: Borrar
-char *detalles[12] = {
-    "OPEN_BRACE",
-    "CLOSE_BRACE",
-    "OPEN_BRACKET",
-    "CLOSE_BRACKET",
-    "STRING",
-    "NUMBER",
-    "BOOLEAN",
-    "NULL",
-    "COLON",
-    "COMMA",
-    "UNKNOWN",
-    "EOF"
-};
-
 struct JSON_Token{
     JSON_Token_Type type;
     String value;
 };
 
-JSON_Parser_State json_parse(String json_str, JSON_Element *json);
-JSON_Parser_State json_parse_cstr(char *json_str, size_t json_size, JSON_Element *json);
+JSON_Parser_State json_parse(Allocator *allocator, String json_str, JSON_Element *json);
+JSON_Parser_State json_parse_cstr(Allocator *allocator, char *json_str, size_t json_size, JSON_Element *json);
 
