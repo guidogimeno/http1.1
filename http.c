@@ -721,7 +721,7 @@ static Http_Handler *find_handler_while_adding_path_params(Segment_Pattern **req
 static i32 connection_write(Connection *connection, Response response) {
     Allocator *allocator = connection->allocator;
 
-    String content_lenght_value = string_from_int(allocator, response.body.size);
+    String content_lenght_value = string_from_i64(allocator, response.body.size);
     String connection_value;
 
     if (connection->keep_alive) {
@@ -754,7 +754,7 @@ static String encode_response(Allocator *allocator, Response response) {
     String space_separator = string_lit(" ");
 
     String version = string_lit("HTTP/1.1 ");
-    String status = string_from_int(allocator, response.status);
+    String status = string_from_i64(allocator, response.status);
     String status_description = http_status_reason(response.status);
     String body = string_with_len((char *)response.body.data, response.body.size);
 
@@ -1143,7 +1143,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
                 if (content_length != NULL) {
 
-                    i64 body_size = string_to_int(*content_length);
+                    i64 body_size = string_to_i64(*content_length);
 
                     if (body_size < 0 || body_size > 4 * KB) { 
                         parser->state = PARSER_STATE_FAILED;

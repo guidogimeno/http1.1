@@ -227,8 +227,11 @@ bool string_is_empty(String str);
 
 String string_to_lower(Allocator *a, String str);
 String string_to_upper(Allocator *a, String str);
-i64    string_to_int(String str);
-String string_from_int(Allocator *a, i64 num);
+String string_from_i64(Allocator *a, i64 num);
+i32 string_to_i32(String str);
+i64 string_to_i64(String str);
+f32 string_to_f32(String str);
+f64 string_to_f64(String str);
 
 String string_sub(Allocator *a, String *str, u32 start, u32 end); 
 String string_sub_cstr(Allocator *a, const char *text, u32 start, u32 end); 
@@ -401,7 +404,7 @@ String string_to_upper(Allocator *a, String str) {
     return new_str;
 }
 
-i64 string_to_int(String str) {
+i64 string_to_i64(String str) {
     u32 i = 0;
 
     i32 sign;
@@ -446,52 +449,56 @@ i64 string_to_int(String str) {
     return result * sign;
 }
 
-f64 string_to_float(String string) {
-    char *str = (char *)string.data;
+i32 string_to_i32(String str) {
+    return (i32)string_to_i64(str);
+}
+
+f64 string_to_f64(String str) {
+    char *data = (char *)str.data;
     f64 result, value, sign, scale;
 	i32 frac;
 
-	while (is_space(*str)) {
-		str++;
+	while (is_space(*data)) {
+		data++;
 	}
 
 	sign = 1.0;
-	if (*str == '-') {
+	if (*data == '-') {
 		sign = -1.0;
-		str++;
-	} else if (*str == '+') {
-		str++;
+		data++;
+	} else if (*data == '+') {
+		data++;
 	}
 
-	for (value = 0.0; is_digit(*str); str++) {
-		value = value * 10.0 + (*str-'0');
+	for (value = 0.0; is_digit(*data); data++) {
+		value = value * 10.0 + (*data-'0');
 	}
 
-	if (*str == '.') {
+	if (*data == '.') {
 		f64 pow10 = 10.0;
-		str++;
-		while (is_digit(*str)) {
-			value += (*str-'0') / pow10;
+		data++;
+		while (is_digit(*data)) {
+			value += (*data-'0') / pow10;
 			pow10 *= 10.0;
-			str++;
+			data++;
 		}
 	}
 
 	frac = 0;
 	scale = 1.0;
-	if ((*str == 'e') || (*str == 'E')) {
+	if ((*data == 'e') || (*data == 'E')) {
 		u32 exp;
 
-		str++;
-		if (*str == '-') {
+		data++;
+		if (*data == '-') {
 			frac = 1;
-			str++;
-		} else if (*str == '+') {
-			str++;
+			data++;
+		} else if (*data == '+') {
+			data++;
 		}
 
-		for (exp = 0; is_digit(*str); str++) {
-			exp = exp * 10 + (*str-'0');
+		for (exp = 0; is_digit(*data); data++) {
+			exp = exp * 10 + (*data-'0');
 		}
 		if (exp > 308) exp = 308;
 
@@ -505,7 +512,11 @@ f64 string_to_float(String string) {
 	return result;
 }
 
-String string_from_int(Allocator *allocator, i64 num) {
+f32 string_to_f32(String string) {
+    return (f32)string_to_f64(string);
+}
+
+String string_from_i64(Allocator *allocator, i64 num) {
     static const u64 powers_of_10[] = {
         1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL,
         10000000ULL, 100000000ULL, 1000000000ULL, 10000000000ULL,

@@ -68,3 +68,20 @@ struct JSON_Token{
 JSON_Parser_State json_parse(Allocator *allocator, String json_str, JSON_Element *json);
 JSON_Parser_State json_parse_cstr(Allocator *allocator, char *json_str, size_t json_size, JSON_Element *json);
 
+b32 json_is_object(JSON_Element *element);
+b32 json_is_array(JSON_Element *element);
+b32 json_is_number(JSON_Element *element);
+b32 json_is_string(JSON_Element *element);
+b32 json_is_boolean(JSON_Element *element);
+b32 json_is_null(JSON_Element *element);
+
+f64 json_get_number(JSON_Element *element);
+b32 json_get_boolean(JSON_Element *element);
+String json_get_string(JSON_Element *element);
+JSON_Element *json_get_next(JSON_Element *element);
+JSON_Element *json_get_object_item(JSON_Element *element, String key);
+JSON_Element *json_array_get_first(JSON_Element *element);
+
+#define json_array_for_each(element, array) \
+    for (JSON_Element *element = array->child; element != NULL; element = element->next) \
+

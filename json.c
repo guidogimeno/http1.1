@@ -151,7 +151,7 @@ static void json_parse_element_value(JSON_Parser *parser, Allocator *allocator, 
         }
         case JSON_TOKEN_NUMBER: {
             element->type = JSON_TYPE_NUMBER;
-            element->value.number = string_to_float(token.value);
+            element->value.number = string_to_f64(token.value);
             break;
         }
         case JSON_TOKEN_NULL: {
@@ -305,3 +305,55 @@ JSON_Parser_State json_parse_cstr(Allocator *allocator, char *json_cstr, size_t 
     return json_parse(allocator, json_str, json);
 };
 
+b32 json_is_object(JSON_Element *element) {
+    return element->type == JSON_TYPE_OBJECT;
+}
+
+b32 json_is_array(JSON_Element *element) {
+    return element->type == JSON_TYPE_ARRAY;
+}
+
+b32 json_is_number(JSON_Element *element) {
+    return element->type == JSON_TYPE_NUMBER;
+}
+
+b32 json_is_boolean(JSON_Element *element) {
+    return element->type == JSON_TYPE_BOOLEAN;
+}
+
+b32 json_is_string(JSON_Element *element) {
+    return element->type == JSON_TYPE_STRING;
+}
+
+b32 json_is_null(JSON_Element *element) {
+    return element->type == JSON_TYPE_NULL;
+}
+
+f64 json_get_number(JSON_Element *element) {
+    return element->value.number;
+}
+
+b32 json_get_boolean(JSON_Element *element) {
+    return element->value.boolean;
+}
+
+String json_get_string(JSON_Element *element) {
+    return element->value.string;
+}
+
+JSON_Element *json_get_object_item(JSON_Element *element, String key) {
+    for (JSON_Element *el = element->child; el; el = el->next) {
+        if (string_eq(key, el->key)) {
+            return el;
+        }
+    }
+    return NULL;
+}
+
+JSON_Element *json_array_get_first(JSON_Element *element) {
+    return element->child;
+}
+
+JSON_Element *json_get_next(JSON_Element *element) {
+    return element->next;
+}

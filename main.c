@@ -100,7 +100,7 @@ static void print_json(JSON_Element *element) {
     for (JSON_Element *el = element;
         el != NULL;
         el = el->next) {
-
+    
         switch (el->type) {
             case JSON_TYPE_STRING: {
                 if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
@@ -158,6 +158,27 @@ int main(int argc, char *argv[], char *env[]) {
     json_parse(allocator, json_str, &element);
 
     print_json(&element);
+    printf("\n\n");
+
+    b32 is_object = json_is_object(&element);
+    printf("es object: %d\n", is_object);
+
+    JSON_Element *arr = json_get_object_item(&element, string_lit("foo"));
+    b32 is_array = json_is_array(arr);
+    printf("es array: %d\n", is_array);
+    printf("a ver: %d\n", is_array);
+
+    for (JSON_Element *e = json_array_get_first(arr); e != NULL; e = json_get_next(e)) {
+        JSON_Element *id = json_get_object_item(e, string_lit("id"));
+        f64 fid = json_get_number(id);
+        printf("numero: %f\n", fid);
+    }
+
+    json_array_for_each(pepe, arr) {
+        JSON_Element *id = json_get_object_item(pepe, string_lit("id"));
+        f64 fid = json_get_number(id);
+        printf("numero: %f\n", fid);
+    }
 
     Server *server = http_server_make(allocator);
 
