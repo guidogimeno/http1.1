@@ -237,6 +237,11 @@ String string_slice(String *str, u32 start, u32 offset);
 char char_to_lower(char c);
 char char_to_upper(char c);
 
+bool is_space(char c);
+bool is_letter(char c);
+bool is_digit(char c);
+bool is_alphanum(char c);
+
 // String_Builder functions
 void   sbuilder_init(String_Builder *builder, Allocator *allocator);
 void   sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity); 
@@ -441,9 +446,63 @@ i64 string_to_int(String str) {
     return result * sign;
 }
 
-f64 string_to_float(String str) {
-    // TODO: ver como hacer esto
-    return 0;
+f64 string_to_float(String string) {
+    char *str = (char *)string.data;
+    f64 result, value, sign, scale;
+	i32 frac;
+
+	while (is_space(*str)) {
+		str++;
+	}
+
+	sign = 1.0;
+	if (*str == '-') {
+		sign = -1.0;
+		str++;
+	} else if (*str == '+') {
+		str++;
+	}
+
+	for (value = 0.0; is_digit(*str); str++) {
+		value = value * 10.0 + (*str-'0');
+	}
+
+	if (*str == '.') {
+		f64 pow10 = 10.0;
+		str++;
+		while (is_digit(*str)) {
+			value += (*str-'0') / pow10;
+			pow10 *= 10.0;
+			str++;
+		}
+	}
+
+	frac = 0;
+	scale = 1.0;
+	if ((*str == 'e') || (*str == 'E')) {
+		u32 exp;
+
+		str++;
+		if (*str == '-') {
+			frac = 1;
+			str++;
+		} else if (*str == '+') {
+			str++;
+		}
+
+		for (exp = 0; is_digit(*str); str++) {
+			exp = exp * 10 + (*str-'0');
+		}
+		if (exp > 308) exp = 308;
+
+		while (exp >= 50) { scale *= 1e50; exp -= 50; }
+		while (exp >=  8) { scale *= 1e8;  exp -=  8; }
+		while (exp >   0) { scale *= 10.0; exp -=  1; }
+	}
+
+	result = sign * (frac ? (value / scale) : (value * scale));
+
+	return result;
 }
 
 String string_from_int(Allocator *allocator, i64 num) {
@@ -552,19 +611,28 @@ char char_to_upper(char c) {
     return c;
 }
 
-bool is_letter(char ch) {
-    return (ch >= 'a' && ch <= 'z') ||
-        (ch >= 'A' && ch <= 'Z');
+bool is_space(char c) {
+    return (c == ' '  ||
+            c == '\t' ||
+            c == '\n' ||
+            c == '\r' ||
+            c == '\f' ||
+            c == '\v');
 }
 
-bool is_digit(char ch) {
-    return (ch >= '0' && ch <= '9');
+bool is_letter(char c) {
+    return (c >= 'a' && c <= 'z') ||
+        (c >= 'A' && c <= 'Z');
 }
 
-bool is_alphanum(char ch) {
-    return (ch >= '0' && ch <= '9') ||
-           (ch >= 'A' && ch <= 'Z') ||
-           (ch >= 'a' && ch <= 'z');
+bool is_digit(char c) {
+    return (c >= '0' && c <= '9');
+}
+
+bool is_alphanum(char c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z');
 }
 
 void sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity) {
