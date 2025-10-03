@@ -341,19 +341,44 @@ String json_get_string(JSON_Element *element) {
     return element->value.string;
 }
 
-JSON_Element *json_get_object_item(JSON_Element *element, String key) {
-    for (JSON_Element *el = element->child; el; el = el->next) {
-        if (string_eq(key, el->key)) {
-            return el;
+JSON_Element *json_object_get(JSON_Element *object, String key) {
+    json_for_each(item, object) {
+        if (string_eq(key, item->key)) {
+            return item;
         }
     }
     return NULL;
 }
 
-JSON_Element *json_array_get_first(JSON_Element *element) {
-    return element->child;
-}
+// String json_to_string(Allocator *allocator, JSON_Element *json) {
+//     char *buff;
+//     u32 size;
+//
+//     switch (json->type) {
+//         case JSON_TYPE_STRING: {
+//             break;
+//         }
+//         case JSON_TYPE_NUMBER: {
+//             break;
+//         }
+//         case JSON_TOKEN_BOOLEAN: {
+//             break;
+//         }
+//         case JSON_TYPE_NULL: {
+//             break;
+//         }
+//         case JSON_TYPE_OBJECT: {
+//             break;
+//         }
+//         case JSON_TYPE_ARRAY: {
+//             break;
+//         }
+//     }
+//
+//     String string = {
+//         .data = buff;
+//         .size = size;
+//     };
+//     return str;
+// }
 
-JSON_Element *json_get_next(JSON_Element *element) {
-    return element->next;
-}
