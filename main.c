@@ -24,27 +24,7 @@ static void set_process_name(int argc, char *argv[], char *env[], char *name) {
     memcpy(argv[0], name, length);
 }
 
-static void handler(Request *request, Response *response) {
-    Allocator_Temp scratch = get_scratch(0, 0);
-    // Allocator *allocator = scratch.allocator;
-
-
-    String path_param = http_request_get_path_param(request, string_lit("bar"));
-    String query_param = http_request_get_query_param(request, string_lit("foo"));
-
-    printf("path_param: %.*s\n", string_print(path_param));
-    printf("query_param: %.*s\n", string_print(query_param));
-
-    String body = string("{ \"DIEZ\": \"DIEZ\" }\n");
-
-    http_response_add_header(response, string_lit("content-type"), string_lit("application/json"));
-    http_response_set_status(response, 200);
-    http_response_write(response, (u8 *)body.data, body.size);
-
-    release_scratch(scratch);
-}
-
-char* read_file_to_string(const char* filename) {
+static char* read_file_to_string(const char* filename) {
     FILE* file = fopen(filename, "r");  // Use "rb" for binary mode if needed
     if (!file) {
         perror("Failed to open file");
@@ -93,86 +73,36 @@ char* read_file_to_string(const char* filename) {
     return buffer;
 }
 
+static void handler(Request *request, Response *response) {
+    Allocator_Temp scratch = get_scratch(0, 0);
+    Allocator *allocator = scratch.allocator;
+    printf("Arranco en: %lu\n", allocator->size);
 
-static void print_json(JSON_Element *element);
+    String path_param = http_request_get_path_param(request, string_lit("bar"));
+    String query_param = http_request_get_query_param(request, string_lit("foo"));
 
-static void print_json(JSON_Element *element) {
-    for (JSON_Element *el = element;
-        el != NULL;
-        el = el->next) {
-    
-        switch (el->type) {
-            case JSON_TYPE_STRING: {
-                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
-                printf("%.*s ", string_print(el->value.string));
-                break;
-            }
-            case JSON_TYPE_NUMBER: {
-                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
-                printf("%f ", el->value.number);
-                break;
-            }
-            case JSON_TYPE_NULL: {
-                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
-                printf("%s ", "NULL");
-                break;
-            }
-            case JSON_TYPE_BOOLEAN: {
-                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
-                printf("%d ", el->value.boolean);
-                break;
-            }
-            case JSON_TYPE_OBJECT: {
-                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
-                printf("{ ");
-                if (el->child) {
-                    print_json(el->child);
-                }
-                printf("} ");
-                break;
-            }
-            case JSON_TYPE_ARRAY: {
-                if (el->key.size > 0) printf("%.*s: ", string_print(el->key));
-                printf("[ ");
-                if (el->child) {
-                    print_json(el->child);
-                }
-                printf("] ");
-                break;
-            }
-            default: { 
-            }
-        }
-    }
+    printf("path_param: %.*s\n", string_print(path_param));
+    printf("query_param: %.*s\n", string_print(query_param));
+
+    char *content = read_file_to_string("test.json");
+    String json_str = string(content);
+
+    JSON_Element element;
+    json_parse(allocator, json_str, &element);
+    String body = json_to_string(allocator, &element);
+
+    http_response_add_header(response, string_lit("content-type"), string_lit("application/json"));
+    http_response_set_status(response, 200);
+    http_response_write(response, (u8 *)body.data, body.size);
+
+    printf("Termino en: %lu\n", allocator->size);
+    release_scratch(scratch);
 }
 
 int main(int argc, char *argv[], char *env[]) {
     set_process_name(argc, argv, env, "HTTP_SERVER_GG");
 
-    char *content = read_file_to_string("copy.json");
-    String json_str = string(content);
-
     Allocator *allocator = allocator_make(1 * MB);
-
-    JSON_Element element;
-    json_parse(allocator, json_str, &element);
-
-    print_json(&element);
-    printf("\n\n");
-
-    b32 is_object = json_is_object(&element);
-    printf("es object: %d\n", is_object);
-
-    JSON_Element *arr = json_object_get(&element, string_lit("foo"));
-    b32 is_array = json_is_array(arr);
-    printf("es array: %d\n", is_array);
-    printf("a ver: %d\n", is_array);
-
-    json_for_each(pepe, arr) {
-        JSON_Element *id = json_object_get(pepe, string_lit("id"));
-        f64 fid = json_get_number(id);
-        printf("numero: %f\n", fid);
-    }
 
     Server *server = http_server_make(allocator);
 

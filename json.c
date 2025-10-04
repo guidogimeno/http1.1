@@ -195,7 +195,6 @@ static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Ele
 
     while (true) {
         JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
-        json_element_init(element);
 
         json_parse_element_value(parser, allocator, element, token);
 
@@ -241,7 +240,6 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
 
     while (true) {
         JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
-        json_element_init(element);
         element->key = element_key;
         
         if (!json_require_token(parser, JSON_TOKEN_COLON)) {
@@ -350,35 +348,216 @@ JSON_Element *json_object_get(JSON_Element *object, String key) {
     return NULL;
 }
 
-// String json_to_string(Allocator *allocator, JSON_Element *json) {
-//     char *buff;
-//     u32 size;
-//
-//     switch (json->type) {
-//         case JSON_TYPE_STRING: {
-//             break;
-//         }
-//         case JSON_TYPE_NUMBER: {
-//             break;
-//         }
-//         case JSON_TOKEN_BOOLEAN: {
-//             break;
-//         }
-//         case JSON_TYPE_NULL: {
-//             break;
-//         }
-//         case JSON_TYPE_OBJECT: {
-//             break;
-//         }
-//         case JSON_TYPE_ARRAY: {
-//             break;
-//         }
-//     }
-//
-//     String string = {
-//         .data = buff;
-//         .size = size;
-//     };
-//     return str;
-// }
+JSON_Element *json_create_object(Allocator *allocator) {
+    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+    element->type = JSON_TYPE_OBJECT;
+    return element;
+}
+
+JSON_Element *json_create_array(Allocator *allocator) {
+    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+    element->type = JSON_TYPE_ARRAY;
+    return element;
+}
+
+JSON_Element *json_create_null(Allocator *allocator) {
+    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+    element->type = JSON_TYPE_NULL;
+    return element;
+}
+
+JSON_Element *json_create_number(Allocator *allocator, f64 number) {
+    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+    element->type = JSON_TYPE_NUMBER;
+    element->value.number = number;
+    return element;
+}
+
+JSON_Element *json_create_string(Allocator *allocator, String string) {
+    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+    element->type = JSON_TYPE_STRING;
+    element->value.string = string;
+    return element;
+}
+
+JSON_Element *json_create_boolean(Allocator *allocator, b32 boolean) {
+    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+    element->type = JSON_TYPE_BOOLEAN;
+    element->value.boolean = boolean;
+    return element;
+}
+
+void json_object_add(JSON_Element *object, JSON_Element *value) {
+    if (!object->child) {
+        object->child = value;
+    } else {
+        JSON_Element *last = object->child;
+        while (last->next) {
+            last = last->next;
+        }
+        last->next = value;
+    }
+}
+
+void json_object_add_string(JSON_Element *object, String key, String value, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->key = key;
+    new_element->value.string = value;
+    json_object_add(object, new_element);
+}
+
+void json_object_add_number(JSON_Element *object, String key, f64 value, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->key = key;
+    new_element->value.number = value;
+    json_object_add(object, new_element);
+}
+
+void json_object_add_boolean(JSON_Element *object, String key, b32 value, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->key = key;
+    new_element->value.boolean = value;
+    json_object_add(object, new_element);
+}
+
+void json_object_add_null(JSON_Element *object, String key, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->key = key;
+    new_element->value.null = NULL;
+    json_object_add(object, new_element);
+}
+
+void json_array_add(JSON_Element *array, JSON_Element *element) {
+    json_object_add(array, element);
+}
+
+void json_array_add_string(JSON_Element *array, String value, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->value.string = value;
+    json_array_add(array, new_element);
+}
+
+void json_array_add_number(JSON_Element *array, f64 value, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->value.number = value;
+    json_array_add(array, new_element);
+}
+
+void json_array_add_boolean(JSON_Element *array, b32 value, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->value.boolean = value;
+    json_array_add(array, new_element);
+}
+
+void json_array_add_null(JSON_Element *array, Allocator *allocator) {
+    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+    new_element->value.null = NULL;
+    json_array_add(array, new_element);
+}
+
+static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *element, b32 is_object) {
+    u32 object_size = 2;
+
+    char *open = allocator_alloc_aligned(allocator, 1, 1);
+    open[0] = is_object ? '{' : '[';
+
+    if (element->child) {
+
+        json_for_each(item, element) {
+
+            if (is_object) {
+                // key
+                u32 str_size = item->key.size + 3;
+                char *str_buff = allocator_alloc_aligned(allocator, str_size, 1);
+
+                str_buff[0] = '"';
+                memcpy(str_buff + 1, item->key.data, str_size);
+                str_buff[str_size - 2] = '"';
+                str_buff[str_size - 1] = ':';
+
+                object_size += str_size;
+            }
+
+            // value
+            switch (item->type) {
+                case JSON_TYPE_STRING: {
+                    u32 str_size = item->value.string.size + 2;
+                    char *str_buff = allocator_alloc_aligned(allocator, str_size, 1);
+
+                    str_buff[0] = '"';
+                    memcpy(str_buff + 1, item->value.string.data, str_size);
+                    str_buff[str_size - 1] = '"';
+
+                    object_size += str_size;
+                    break;
+                }
+                case JSON_TYPE_NUMBER: {
+                    // TODO: Hacer esto
+                    char *data = allocator_alloc_aligned(allocator, 4, 1);
+                    memcpy(data, "1234", 4);
+                    object_size += 4;
+                    break;
+                }
+                case JSON_TYPE_NULL: {
+                    char *null_buff = allocator_alloc_aligned(allocator, 4, 1);
+
+                    memcpy(null_buff, "null", 4);
+
+                    object_size += 4;
+                    break;
+                }
+                case JSON_TYPE_BOOLEAN: {
+                    u32 size;
+                    if (item->value.boolean) {
+                        size = 4;
+                        char *buff = allocator_alloc_aligned(allocator, size, 1);
+                        memcpy(buff, "true", size);
+                    } else {
+                        size = 5;
+                        char *buff = allocator_alloc_aligned(allocator, size, 1);
+                        memcpy(buff, "false", size);
+                    }
+
+                    object_size += size;
+                    break;
+                }
+                case JSON_TYPE_OBJECT: {
+                    object_size += json_append_element_as_string(allocator, item, true);
+                    break;
+                }
+                case JSON_TYPE_ARRAY: {
+                    object_size += json_append_element_as_string(allocator, item, false);
+                    break;
+                }
+            }
+
+            if (item->next) {
+                char *comma_buff = allocator_alloc_aligned(allocator, 1, 1);
+                comma_buff[0] = ',';
+                object_size += 1;
+            }
+        }
+    }
+
+    char *close = allocator_alloc_aligned(allocator, 1, 1);
+    close[0] = is_object ? '}' : ']';
+
+    return object_size;
+}
+
+String json_to_string(Allocator *allocator, JSON_Element *json) {
+    String result = {0};
+
+    if (json != NULL) {
+        result.data = allocator_alloc_aligned(allocator, 0, 1);
+
+        if (json->type == JSON_TYPE_OBJECT) {
+            result.size = json_append_element_as_string(allocator, json, true);
+        } else if (json->type == JSON_TYPE_ARRAY) {
+            result.size = json_append_element_as_string(allocator, json, true);
+        }
+    }
+
+    return result;
+}
 

@@ -84,36 +84,22 @@ JSON_Element *json_object_get(JSON_Element *object, String key);
 #define json_for_each(element, parent) \
     for (JSON_Element *element = parent->child; element != NULL; element = element->next) \
 
-JSON_Element *json_create_object();
-JSON_Element *json_create_array();
-JSON_Element *json_create_null();
-JSON_Element *json_create_number(f64 number);
-JSON_Element *json_create_string(String string);
-JSON_Element *json_create_boolean(b32 boolean);
+JSON_Element *json_create_object(Allocator *allocator);
+JSON_Element *json_create_array(Allocator *allocator);
+JSON_Element *json_create_null(Allocator *allocator);
+JSON_Element *json_create_number(Allocator *allocator, f64 number);
+JSON_Element *json_create_string(Allocator *allocator, String string);
+JSON_Element *json_create_boolean(Allocator *allocator, b32 boolean);
 
-void json_object_add(JSON_Element *object, String key, JSON_Element *value);
-void json_object_add_string(JSON_Element *object, String key, String value);
-void json_object_add_number(JSON_Element *object, String key, f64 value);
-void json_object_add_boolean(JSON_Element *object, String key, b32 value);
-void json_object_add_null(JSON_Element *object, String key);
+void json_object_add(JSON_Element *object, JSON_Element *value);
+void json_object_add_string(JSON_Element *object, String key, String value, Allocator *allocator);
+void json_object_add_number(JSON_Element *object, String key, f64 value, Allocator *allocator);
+void json_object_add_boolean(JSON_Element *object, String key, b32 value, Allocator *allocator);
+void json_object_add_null(JSON_Element *object, String key, Allocator *allocator);
 
 void json_array_add(JSON_Element *array, JSON_Element *element);
-void json_array_add_string(JSON_Element *array, String string);
-void json_array_add_number(JSON_Element *array, f64 number);
-void json_array_add_boolean(JSON_Element *array, b32 boolean);
-void json_array_add_null(JSON_Element *array);
-
-JSON_Element *json_object_push_object(JSON_Element *object, String key);
-JSON_Element *json_object_push_array(JSON_Element *object, String key);
-JSON_Element *json_object_push_string(JSON_Element *object, String key, String value);
-JSON_Element *json_object_push_number(JSON_Element *object, String key, f64 value);
-JSON_Element *json_object_push_boolean(JSON_Element *object, String key, b32 value);
-JSON_Element *json_object_push_null(JSON_Element *object, String key);
-
-JSON_Element *json_array_push_object(JSON_Element *array);
-JSON_Element *json_array_push_array(JSON_Element *array);
-JSON_Element *json_array_push_string(JSON_Element *array, String string);
-JSON_Element *json_array_push_number(JSON_Element *array, f64 number);
-JSON_Element *json_array_push_boolean(JSON_Element *array, b32 boolean);
-JSON_Element *json_array_push_null(JSON_Element *array);
+void json_array_add_string(JSON_Element *array, String value, Allocator *allocator);
+void json_array_add_number(JSON_Element *array, f64 value, Allocator *allocator);
+void json_array_add_boolean(JSON_Element *array, b32 value, Allocator *allocator);
+void json_array_add_null(JSON_Element *array, Allocator *allocator);
 

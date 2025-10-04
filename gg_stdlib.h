@@ -73,7 +73,7 @@ __thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
 
 Allocator *allocator_make(u64 capacity);
 void *allocator_alloc(Allocator *allocator, u64 size);
-void *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align);
+void *allocator_alloc_aligned(Allocator *allocator, u64 size, size_t align);
 void allocator_reset(Allocator *allocator);
 void allocator_destroy(Allocator *allocator);
 
@@ -117,10 +117,10 @@ static uintptr_t align_forward(uintptr_t ptr, size_t align) {
 }
 
 void *allocator_alloc(Allocator *allocator, u64 size) {
-    return alloctor_alloc_aligned(allocator, size, DEFAULT_ALIGNMENT);
+    return allocator_alloc_aligned(allocator, size, DEFAULT_ALIGNMENT);
 }
 
-void *alloctor_alloc_aligned(Allocator *allocator, u64 size, size_t align) {
+void *allocator_alloc_aligned(Allocator *allocator, u64 size, size_t align) {
     uintptr_t current_ptr = (uintptr_t)allocator->data + (uintptr_t)allocator->size;
     uintptr_t offset = align_forward(current_ptr, align);
     offset -= (uintptr_t)allocator->data;
@@ -158,7 +158,7 @@ void allocator_temp_end(Allocator_Temp allocator_temp) {
 Allocator_Temp get_scratch(Allocator **conflicts, u64 conflict_count) {
     if (thread_local_allocators_pool[0] == 0) {
         for (u32 i = 0; i < MAX_SCRATCH_COUNT; i++) {
-            thread_local_allocators_pool[i] = allocator_make(1024 * 1024); 
+            thread_local_allocators_pool[i] = allocator_make(1 * MB); 
         }
     }
 
@@ -227,6 +227,7 @@ bool string_is_empty(String str);
 
 String string_to_lower(Allocator *a, String str);
 String string_to_upper(Allocator *a, String str);
+String string_from_b32(Allocator *a, b32 boolean);
 String string_from_i64(Allocator *a, i64 num);
 i32 string_to_i32(String str);
 i64 string_to_i64(String str);
@@ -516,6 +517,27 @@ f32 string_to_f32(String string) {
     return (f32)string_to_f64(string);
 }
 
+String string_from_b32(Allocator *allocator, b32 boolean) {
+    String result;
+    char *buff;
+    u32 size;
+
+    if (boolean) {
+        size = 4;
+        buff = allocator_alloc(allocator, size);
+        memcpy(buff, "true", size);
+    } else {
+        size = 5;
+        buff = allocator_alloc(allocator, size);
+        memcpy(buff, "false", size);
+    }
+
+    result.data = buff;
+    result.size = size;
+
+    return result;
+}
+
 String string_from_i64(Allocator *allocator, i64 num) {
     static const u64 powers_of_10[] = {
         1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL,
@@ -718,7 +740,7 @@ void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t it
     uintptr_t items_offset = dynamic_array->length * item_size;
 
     if (allocator->data + allocator->size == dynamic_array->items + items_offset) {
-        alloctor_alloc_aligned(allocator, dynamic_array->capacity * item_size, 1);
+        allocator_alloc_aligned(allocator, dynamic_array->capacity * item_size, 1);
     } else {
         void *data = allocator_alloc(allocator, 2 * dynamic_array->capacity * item_size);
         if (dynamic_array->length > 0) {
