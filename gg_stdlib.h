@@ -229,6 +229,7 @@ String string_to_lower(Allocator *a, String str);
 String string_to_upper(Allocator *a, String str);
 String string_from_b32(Allocator *a, b32 boolean);
 String string_from_i64(Allocator *a, i64 num);
+String string_from_f64(Allocator *a, f64 num, i32 precision);
 i32 string_to_i32(String str);
 i64 string_to_i64(String str);
 f32 string_to_f32(String str);
@@ -538,40 +539,40 @@ String string_from_b32(Allocator *allocator, b32 boolean) {
     return result;
 }
 
+static const u64 powers_of_10[] = {
+    1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL,
+    10000000ULL, 100000000ULL, 1000000000ULL, 10000000000ULL,
+    100000000000ULL, 1000000000000ULL, 10000000000000ULL,
+    100000000000000ULL, 1000000000000000ULL, 10000000000000000ULL,
+    100000000000000000ULL, 1000000000000000000ULL, 10000000000000000000ULL
+};
+
+static const u8 digit_counts[] = {1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
+
+static const char two_digit_table[100][2] = {
+    {'0', '0'}, {'0', '1'}, {'0', '2'}, {'0', '3'}, {'0', '4'}, {'0', '5'},
+    {'0', '6'}, {'0', '7'}, {'0', '8'}, {'0', '9'}, {'1', '0'}, {'1', '1'},
+    {'1', '2'}, {'1', '3'}, {'1', '4'}, {'1', '5'}, {'1', '6'}, {'1', '7'}, 
+    {'1', '8'}, {'1', '9'}, {'2', '0'}, {'2', '1'}, {'2', '2'}, {'2', '3'},
+    {'2', '4'}, {'2', '5'}, {'2', '6'}, {'2', '7'}, {'2', '8'}, {'2', '9'},
+    {'3', '0'}, {'3', '1'}, {'3', '2'}, {'3', '3'}, {'3', '4'}, {'3', '5'}, 
+    {'3', '6'}, {'3', '7'}, {'3', '8'}, {'3', '9'}, {'4', '0'}, {'4', '1'}, 
+    {'4', '2'}, {'4', '3'}, {'4', '4'}, {'4', '5'}, {'4', '6'}, {'4', '7'},
+    {'4', '8'}, {'4', '9'}, {'5', '0'}, {'5', '1'}, {'5', '2'}, {'5', '3'},
+    {'5', '4'}, {'5', '5'}, {'5', '6'}, {'5', '7'}, {'5', '8'}, {'5', '9'},
+    {'6', '0'}, {'6', '1'}, {'6', '2'}, {'6', '3'}, {'6', '4'}, {'6', '5'},
+    {'6', '6'}, {'6', '7'}, {'6', '8'}, {'6', '9'}, {'7', '0'}, {'7', '1'},
+    {'7', '2'}, {'7', '3'}, {'7', '4'}, {'7', '5'}, {'7', '6'}, {'7', '7'},
+    {'7', '8'}, {'7', '9'}, {'8', '0'}, {'8', '1'}, {'8', '2'}, {'8', '3'},
+    {'8', '4'}, {'8', '5'}, {'8', '6'}, {'8', '7'}, {'8', '8'}, {'8', '9'},
+    {'9', '0'}, {'9', '1'}, {'9', '2'}, {'9', '3'}, {'9', '4'}, {'9', '5'},
+    {'9', '6'}, {'9', '7'}, {'9', '8'}, {'9', '9'}
+};
+
+static const char int64_min_str[] = "-9223372036854775808";
+static const char int64_max_str[] = "9223372036854775807";
+
 String string_from_i64(Allocator *allocator, i64 num) {
-    static const u64 powers_of_10[] = {
-        1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL,
-        10000000ULL, 100000000ULL, 1000000000ULL, 10000000000ULL,
-        100000000000ULL, 1000000000000ULL, 10000000000000ULL,
-        100000000000000ULL, 1000000000000000ULL, 10000000000000000ULL,
-        100000000000000000ULL, 1000000000000000000ULL, 10000000000000000000ULL
-    };
-
-    static const u8 digit_counts[] = {1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
-
-    static const char two_digit_table[100][2] = {
-        {'0', '0'}, {'0', '1'}, {'0', '2'}, {'0', '3'}, {'0', '4'}, {'0', '5'},
-        {'0', '6'}, {'0', '7'}, {'0', '8'}, {'0', '9'}, {'1', '0'}, {'1', '1'},
-        {'1', '2'}, {'1', '3'}, {'1', '4'}, {'1', '5'}, {'1', '6'}, {'1', '7'}, 
-        {'1', '8'}, {'1', '9'}, {'2', '0'}, {'2', '1'}, {'2', '2'}, {'2', '3'},
-        {'2', '4'}, {'2', '5'}, {'2', '6'}, {'2', '7'}, {'2', '8'}, {'2', '9'},
-        {'3', '0'}, {'3', '1'}, {'3', '2'}, {'3', '3'}, {'3', '4'}, {'3', '5'}, 
-        {'3', '6'}, {'3', '7'}, {'3', '8'}, {'3', '9'}, {'4', '0'}, {'4', '1'}, 
-        {'4', '2'}, {'4', '3'}, {'4', '4'}, {'4', '5'}, {'4', '6'}, {'4', '7'},
-        {'4', '8'}, {'4', '9'}, {'5', '0'}, {'5', '1'}, {'5', '2'}, {'5', '3'},
-        {'5', '4'}, {'5', '5'}, {'5', '6'}, {'5', '7'}, {'5', '8'}, {'5', '9'},
-        {'6', '0'}, {'6', '1'}, {'6', '2'}, {'6', '3'}, {'6', '4'}, {'6', '5'},
-        {'6', '6'}, {'6', '7'}, {'6', '8'}, {'6', '9'}, {'7', '0'}, {'7', '1'},
-        {'7', '2'}, {'7', '3'}, {'7', '4'}, {'7', '5'}, {'7', '6'}, {'7', '7'},
-        {'7', '8'}, {'7', '9'}, {'8', '0'}, {'8', '1'}, {'8', '2'}, {'8', '3'},
-        {'8', '4'}, {'8', '5'}, {'8', '6'}, {'8', '7'}, {'8', '8'}, {'8', '9'},
-        {'9', '0'}, {'9', '1'}, {'9', '2'}, {'9', '3'}, {'9', '4'}, {'9', '5'},
-        {'9', '6'}, {'9', '7'}, {'9', '8'}, {'9', '9'}
-    };
-
-    static const char int64_min_str[] = "-9223372036854775808";
-    static const char int64_max_str[] = "9223372036854775807";
-
     if (num == 0) {
         char *buf = (char *)allocator_alloc(allocator, 1);
         buf[0] = '0';
@@ -624,6 +625,86 @@ String string_from_i64(Allocator *allocator, i64 num) {
 
     if (is_negative) {
         buf[0] = '-';
+    }
+
+    String str = { .data = buf, .size = length };
+    return str;
+}
+
+String string_from_f64(Allocator *a, f64 num, i32 precision) {
+    if (precision < 0) {
+        precision = 0;
+    }
+
+    f64 abs_num = num;
+    bool is_negative = false;
+    if (num < 0) {
+        abs_num = -num;
+        is_negative = true;
+    }
+
+    u64 int_part = (u64) abs_num;
+    f64 frac_part = abs_num - (f64)int_part;
+
+    u32 int_len = 0;
+    for (u32 i = 0; i < 20; i++) {
+        if (int_part < powers_of_10[i]) {
+            int_len = digit_counts[i];
+            break;
+        }
+    }
+    if (int_part == 0) {
+        int_len = 1;
+    }
+
+    u32 frac_total = (u32)(precision > 0 ? 1 + precision : 0);
+    u32 length = (is_negative ? 1u : 0u) + int_len + frac_total;
+
+    char *buf = (char *)allocator_alloc_aligned(a, length, 1);
+    u32 curr = 0;
+
+    if (is_negative) {
+        buf[curr++] = '-';
+    }
+
+    u32 int_digit_start = curr;
+    u32 num_int_digits = int_len;
+    u32 i = int_digit_start + num_int_digits - 1;
+    u64 abs_int = int_part;
+
+    if (abs_int == 0) {
+        buf[int_digit_start] = '0';
+    } else {
+        while (abs_int >= 100) {
+            u32 pair = (u32)(abs_int % 100);
+            abs_int /= 100;
+            buf[i] = two_digit_table[pair][1];
+            buf[i - 1] = two_digit_table[pair][0];
+            i -= 2;
+        }
+        if (abs_int > 0) {
+            if (abs_int < 10) {
+                buf[i] = (char)('0' + abs_int);
+            } else {
+                u32 pair = (u32)abs_int;
+                buf[i] = two_digit_table[pair][1];
+                buf[i - 1] = two_digit_table[pair][0];
+                i -= 1;
+            }
+        }
+    }
+
+    curr = int_digit_start + num_int_digits;
+    if (precision > 0) {
+        buf[curr++] = '.';
+        f64 f = frac_part;
+        for (i32 d = 0; d < precision; ++d) {
+            f *= 10.0;
+            i64 dig = (i64)f;
+            f -= (f64)dig;
+            buf[curr + (u32)d] = (char)('0' + (u8)dig);
+        }
+        curr += (u32)precision;
     }
 
     String str = { .data = buf, .size = length };

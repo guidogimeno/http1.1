@@ -27,24 +27,24 @@ static void set_process_name(int argc, char *argv[], char *env[], char *name) {
 static char* read_file_to_string(const char* filename) {
     FILE* file = fopen(filename, "r");  // Use "rb" for binary mode if needed
     if (!file) {
-        perror("Failed to open file");
+        printf("Failed to open file\n");
         return NULL;
     }
 
     // Get file size
     if (fseek(file, 0, SEEK_END) != 0) {
-        perror("Failed to seek file");
+        printf("Failed to seek file\n");
         fclose(file);
         return NULL;
     }
     long file_size = ftell(file);
     if (file_size == -1) {
-        perror("Failed to get file size");
+        printf("Failed to get file size\n");
         fclose(file);
         return NULL;
     }
     if (fseek(file, 0, SEEK_SET) != 0) {
-        perror("Failed to rewind file");
+        printf("Failed to rewind file\n");
         fclose(file);
         return NULL;
     }
@@ -52,7 +52,7 @@ static char* read_file_to_string(const char* filename) {
     // Allocate buffer (+1 for null terminator)
     char* buffer = malloc((size_t)file_size + 1);
     if (!buffer) {
-        perror("Failed to allocate memory");
+        printf("Failed to allocate memory");
         fclose(file);
         return NULL;
     }
@@ -60,7 +60,7 @@ static char* read_file_to_string(const char* filename) {
     // Read the file
     size_t bytes_read = fread(buffer, 1, (size_t)file_size, file);
     if (bytes_read != (size_t)file_size) {
-        perror("Failed to read file");
+        printf("Failed to read file");
         free(buffer);
         fclose(file);
         return NULL;
@@ -76,7 +76,6 @@ static char* read_file_to_string(const char* filename) {
 static void handler(Request *request, Response *response) {
     Allocator_Temp scratch = get_scratch(0, 0);
     Allocator *allocator = scratch.allocator;
-    printf("Arranco en: %lu\n", allocator->size);
 
     String path_param = http_request_get_path_param(request, string_lit("bar"));
     String query_param = http_request_get_query_param(request, string_lit("foo"));

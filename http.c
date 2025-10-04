@@ -228,7 +228,7 @@ static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *alloca
 
 i32 http_server_start(Server *server, u32 port, char *host) {
     if (signals_init() == -1) {
-        perror("error al iniciar las signals");
+        printf("error al iniciar las signals\n");
         return EXIT_FAILURE;
     }
 
@@ -248,7 +248,7 @@ i32 http_server_start(Server *server, u32 port, char *host) {
     }
 
     if (events_add_fd(events_fd, server_fd) == -1) {
-        perror("error al agregar server_fd al epoll events");
+        printf("error al agregar server_fd al epoll events\n");
         return EXIT_FAILURE;
     }
 
@@ -384,14 +384,14 @@ static i32 start_listening(u32 port, char *host) {
     // creacion del socket
     i32 fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd == -1) {
-        perror("error al crear socket");
+        printf("error al crear socket\n");
         exit(EXIT_FAILURE);
     }
 
     // address reutilizable, no hace falta esperar al TIME_WAIT
     i32 reuse = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == -1) {
-        perror("error al realizar setsockopt(SO_REUSEADDR)");
+        printf("error al realizar setsockopt(SO_REUSEADDR)\n");
         exit(EXIT_FAILURE);
     }
     
@@ -403,13 +403,13 @@ static i32 start_listening(u32 port, char *host) {
     };
     
     if (bind(fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-        perror("error al realizar el bind");
+        printf("error al realizar el bind\n");
         exit(EXIT_FAILURE);
     }
     
     // escuchar a traves del socket
     if (listen(fd, MAX_CONNECTIONS) == -1) {
-        perror("error al realizar el listen");
+        printf("error al realizar el listen\n");
         exit(EXIT_FAILURE);
     }
 
@@ -441,25 +441,25 @@ static void server_accept_client(Server *server) {
 
     i32 client_fd = accept(server->fd, (struct sockaddr *)&client_addr, &client_addr_len);
     if (client_fd == -1) {
-        perror("error al aceptar cliente");
+        printf("error al aceptar cliente\n");
         return;
     }
     
     if (set_nonblocking(client_fd) == -1) {
-        perror("error al setear el nonblocking");
+        printf("error al setear el nonblocking\n");
         close(client_fd);
         return;
     }
 
     Connection *connection = server_find_free_connection(server);
     if (connection == NULL) {
-        perror("no hay conexiones libres");
+        printf("no hay conexiones libres\n");
         close(client_fd);
         return;
     }
 
     if (events_add_fd(server->events_fd, client_fd) == -1) {
-        perror("error al agregar client_fd al epoll events");
+        printf("error al agregar client_fd al epoll events\n");
         close(client_fd);
         return;
     }

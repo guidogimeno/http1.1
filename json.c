@@ -492,10 +492,9 @@ static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *ele
                     break;
                 }
                 case JSON_TYPE_NUMBER: {
-                    // TODO: Hacer esto
-                    char *data = allocator_alloc_aligned(allocator, 4, 1);
-                    memcpy(data, "1234", 4);
-                    object_size += 4;
+                    // -42 rompio
+                    String number = string_from_f64(allocator, item->value.number, 2);
+                    object_size += number.size;
                     break;
                 }
                 case JSON_TYPE_NULL: {
