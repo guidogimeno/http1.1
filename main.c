@@ -77,10 +77,6 @@ static void handler(Request *request, Response *response) {
     Allocator_Temp scratch = get_scratch(0, 0);
     Allocator *allocator = scratch.allocator;
 
-    f64 fff = 19.98;
-    String s1 = string_from_f64(allocator, fff, 2);
-    printf("%.*s\n", string_print(s1));
-
     String path_param = http_request_get_path_param(request, string_lit("bar"));
     String query_param = http_request_get_query_param(request, string_lit("foo"));
 

@@ -507,10 +507,10 @@ f64 string_to_f64(String str) {
     }
 
     if (data[i] == '.') {
-        f64 decimal = 0.0;  // Use double for accumulation (or long double for extra precision)
+        f64 decimal = 0.0;
         int dec_places = 0;
         i++;
-        while (i < size && is_digit(data[i])) {  // Cast to unsigned for isdigit safety
+        while (i < size && is_digit(data[i])) {
             decimal = decimal * 10.0 + (data[i] - '0');
             dec_places++;
             i++;
@@ -537,7 +537,9 @@ f64 string_to_f64(String str) {
                 i++;
             }
 
-            if (exp > 308) exp = 308;
+            if (exp > 308) {
+                exp = 308;
+            }
 
             while (exp >= 50) { scale *= 1e50; exp -= 50; }
             while (exp >=  8) { scale *= 1e8;  exp -=  8; }
