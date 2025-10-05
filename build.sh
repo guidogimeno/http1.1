@@ -26,7 +26,7 @@ case "$1" in
             rm -f "main"
         fi
         clang -g -std=c11 -Wall -Werror main.c -o main
-        gdb -q -ex "set debuginfod enabled off" -ex "layout src" -ex "break main.c:193" -ex "run" ./main
+        gdb -q -ex "set debuginfod enabled off" -ex "layout src" -ex "break main.c:108" -ex "run" ./main
         ;;
     "exp")
         if [ -f "exp" ]; then

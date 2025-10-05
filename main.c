@@ -27,24 +27,24 @@ static void set_process_name(int argc, char *argv[], char *env[], char *name) {
 static char* read_file_to_string(const char* filename) {
     FILE* file = fopen(filename, "r");  // Use "rb" for binary mode if needed
     if (!file) {
-        printf("Failed to open file\n");
+        perror("Failed to open file");
         return NULL;
     }
 
     // Get file size
     if (fseek(file, 0, SEEK_END) != 0) {
-        printf("Failed to seek file\n");
+        perror("Failed to seek file");
         fclose(file);
         return NULL;
     }
     long file_size = ftell(file);
     if (file_size == -1) {
-        printf("Failed to get file size\n");
+        perror("Failed to get file size");
         fclose(file);
         return NULL;
     }
     if (fseek(file, 0, SEEK_SET) != 0) {
-        printf("Failed to rewind file\n");
+        perror("Failed to rewind file");
         fclose(file);
         return NULL;
     }
@@ -52,7 +52,7 @@ static char* read_file_to_string(const char* filename) {
     // Allocate buffer (+1 for null terminator)
     char* buffer = malloc((size_t)file_size + 1);
     if (!buffer) {
-        printf("Failed to allocate memory");
+        perror("Failed to allocate memory");
         fclose(file);
         return NULL;
     }
@@ -60,7 +60,7 @@ static char* read_file_to_string(const char* filename) {
     // Read the file
     size_t bytes_read = fread(buffer, 1, (size_t)file_size, file);
     if (bytes_read != (size_t)file_size) {
-        printf("Failed to read file");
+        perror("Failed to read file");
         free(buffer);
         fclose(file);
         return NULL;
@@ -76,6 +76,10 @@ static char* read_file_to_string(const char* filename) {
 static void handler(Request *request, Response *response) {
     Allocator_Temp scratch = get_scratch(0, 0);
     Allocator *allocator = scratch.allocator;
+
+    f64 fff = 19.98;
+    String s1 = string_from_f64(allocator, fff, 2);
+    printf("%.*s\n", string_print(s1));
 
     String path_param = http_request_get_path_param(request, string_lit("bar"));
     String query_param = http_request_get_query_param(request, string_lit("foo"));

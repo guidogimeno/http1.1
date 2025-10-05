@@ -1,5 +1,10 @@
 {
   "objects": {
+    "summary": {
+      "total": 19.98,
+      "items": 2,
+      "empty": {}
+    },
     "empty": {},
     "single_pair": {"key": "value"},
     "mixed_values": {
@@ -86,12 +91,7 @@
             "active": true,
             "details": null
           }
-        ],
-        "summary": {
-          "total": 19.98,
-          "items": 2,
-          "empty": {}
-        }
+        ]
       }
     },
     "edge_cases": {

@@ -492,7 +492,6 @@ static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *ele
                     break;
                 }
                 case JSON_TYPE_NUMBER: {
-                    // -42 rompio
                     String number = string_from_f64(allocator, item->value.number, 2);
                     object_size += number.size;
                     break;

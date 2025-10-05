@@ -43,7 +43,33 @@ typedef double f64;
     exit(EXIT_FAILURE); \
 } while (0);
 
+f32 math_exp(f32 a) {
+    union { f32 f; f32 i; } u, v;
+    u.i = (i32)(6051102.0f * a + 1056478197.0f);
+    v.i = (i32)(1056478197.0f - 6051102.0f * a);
+    return u.f / v.f;
+}
 
+f32 math_pow(f32 a, f32 b) {
+    i32 flipped = 0, e;
+    f32 f, r = 1.0f;
+    if (b < 0) {
+        flipped = 1;
+        b = -b;
+    }
+
+    e = (i32)b;
+    f = math_exp(b - e);
+
+    while (e) {
+        if (e & 1) r *= a;
+        a *= a;
+        e >>= 1;
+    }
+
+    r *= f;
+    return flipped ? 1.0f/r : r;
+}
 
 
 
@@ -457,60 +483,70 @@ i32 string_to_i32(String str) {
 
 f64 string_to_f64(String str) {
     char *data = (char *)str.data;
-    f64 result, value, sign, scale;
-	i32 frac;
-
-	while (is_space(*data)) {
-		data++;
+    u32 size = str.size;
+    u32 i = 0;
+    i32 sign = 1.0;
+    f64 scale = 1.0;
+	i32 frac = 0;
+    f64 result, value = 0.0;
+	
+	while (i < size && is_space(data[i])) {
+		i++;
 	}
 
-	sign = 1.0;
-	if (*data == '-') {
+	if (data[i] == '-') {
 		sign = -1.0;
-		data++;
-	} else if (*data == '+') {
-		data++;
+		i++;
+	} else if (data[i] == '+') {
+		i++;
 	}
 
-	for (value = 0.0; is_digit(*data); data++) {
-		value = value * 10.0 + (*data-'0');
-	}
+    while (i < size && is_digit(data[i])) {
+		value = value * 10.0 + (data[i]-'0');
+        i++;
+    }
 
-	if (*data == '.') {
-		f64 pow10 = 10.0;
-		data++;
-		while (is_digit(*data)) {
-			value += (*data-'0') / pow10;
-			pow10 *= 10.0;
-			data++;
-		}
-	}
+    if (data[i] == '.') {
+        f64 decimal = 0.0;  // Use double for accumulation (or long double for extra precision)
+        int dec_places = 0;
+        i++;
+        while (i < size && is_digit(data[i])) {  // Cast to unsigned for isdigit safety
+            decimal = decimal * 10.0 + (data[i] - '0');
+            dec_places++;
+            i++;
+        }
+        if (dec_places > 0) {
+            value += decimal / math_pow(10.0, dec_places);
+        }
+    }
 
-	frac = 0;
-	scale = 1.0;
-	if ((*data == 'e') || (*data == 'E')) {
-		u32 exp;
+    if (i + 1 < size) {
+        if ((data[i] == 'e') || (data[i] == 'E')) {
+            u32 exp = 0;
 
-		data++;
-		if (*data == '-') {
-			frac = 1;
-			data++;
-		} else if (*data == '+') {
-			data++;
-		}
+            i++;
+            if (data[i] == '-') {
+                frac = 1;
+                i++;
+            } else if (data[i] == '+') {
+                i++;
+            }
 
-		for (exp = 0; is_digit(*data); data++) {
-			exp = exp * 10 + (*data-'0');
-		}
-		if (exp > 308) exp = 308;
+            while (i < size && is_digit(data[i])) {
+                exp = exp * 10 + (data[i]-'0');
+                i++;
+            }
 
-		while (exp >= 50) { scale *= 1e50; exp -= 50; }
-		while (exp >=  8) { scale *= 1e8;  exp -=  8; }
-		while (exp >   0) { scale *= 10.0; exp -=  1; }
-	}
+            if (exp > 308) exp = 308;
 
+            while (exp >= 50) { scale *= 1e50; exp -= 50; }
+            while (exp >=  8) { scale *= 1e8;  exp -=  8; }
+            while (exp >   0) { scale *= 10.0; exp -=  1; }
+        }
+    }
+	
 	result = sign * (frac ? (value / scale) : (value * scale));
-
+	
 	return result;
 }
 
