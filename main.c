@@ -74,36 +74,32 @@ static char* read_file_to_string(const char* filename) {
 }
 
 static void handler(Request *request, Response *response) {
-    Allocator_Temp scratch = get_scratch(0, 0);
-    Allocator *allocator = scratch.allocator;
+    Arena_Temp scratch = get_scratch(0, 0);
+    Arena *arena = scratch.arena;
 
-    String path_param = http_request_get_path_param(request, string_lit("bar"));
-    String query_param = http_request_get_query_param(request, string_lit("foo"));
+    // String path_param = http_request_get_path_param(request, string_lit("bar"));
+    // String query_param = http_request_get_query_param(request, string_lit("foo"));
 
-    printf("path_param: %.*s\n", string_print(path_param));
-    printf("query_param: %.*s\n", string_print(query_param));
-
-    char *content = read_file_to_string("test.json");
+    char *content = read_file_to_string("copy.json");
     String json_str = string(content);
 
     JSON_Element element;
-    json_parse(allocator, json_str, &element);
-    String body = json_to_string(allocator, &element);
+    json_parse(arena, json_str, &element);
+    String body = json_to_string(arena, &element);
 
     http_response_add_header(response, string_lit("content-type"), string_lit("application/json"));
     http_response_set_status(response, 200);
     http_response_write(response, (u8 *)body.data, body.size);
 
-    printf("Termino en: %lu\n", allocator->size);
     release_scratch(scratch);
 }
 
 int main(int argc, char *argv[], char *env[]) {
     set_process_name(argc, argv, env, "HTTP_SERVER_GG");
 
-    Allocator *allocator = allocator_make(1 * MB);
+    Arena *arena = arena_make(1 * MB);
 
-    Server *server = http_server_make(allocator);
+    Server *server = http_server_make(arena);
 
     http_server_handle(server, "GET /foo/{bar}/baz", &handler);
 

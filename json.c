@@ -1,5 +1,5 @@
-static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_Element *parent);
-static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Element *parent);
+static void json_parse_object(JSON_Parser *parser, Arena *arena, JSON_Element *parent);
+static void json_parse_array(JSON_Parser *parser, Arena *arena, JSON_Element *parent);
 
 static JSON_Token json_get_token(JSON_Parser *parser) {
     JSON_Token token = {0};
@@ -85,18 +85,23 @@ static JSON_Token json_get_token(JSON_Parser *parser) {
 
                 u32 start = parser->at;
 
-                if (is_letter(parser->json_str.data[parser->at])) {
+                bool valid = true;
+                while (valid && parser->at < parser->json_str.size) {
+                    c = parser->json_str.data[parser->at];
+                    if (c == '"') {
+                        break;
+                    }
 
                     // TODO: Soportar escaped chars
-                    while (parser->at < parser->json_str.size &&
-                           (is_alphanum(parser->json_str.data[parser->at]) ||
-                           parser->json_str.data[parser->at] == '_'        ||
-                           parser->json_str.data[parser->at] == ' ')) {
-                        parser->at++;
+                    if (c == '\\') {
+                        valid = false;
+                        break;
                     }
+
+                    parser->at++;
                 }
 
-                if (parser->json_str.data[parser->at] == '"') {
+                if (valid && c == '"') {
                     token.type = JSON_TOKEN_STRING;
                     token.value.data = &parser->json_str.data[start];
                     token.value.size = parser->at - start;
@@ -142,7 +147,7 @@ static bool json_require_token(JSON_Parser *parser, JSON_Token_Type type) {
     }
 }
 
-static void json_parse_element_value(JSON_Parser *parser, Allocator *allocator, JSON_Element *element, JSON_Token token) {
+static void json_parse_element_value(JSON_Parser *parser, Arena *arena, JSON_Element *element, JSON_Token token) {
     switch (token.type) {
         case JSON_TOKEN_STRING: {
             element->type = JSON_TYPE_STRING;
@@ -165,11 +170,11 @@ static void json_parse_element_value(JSON_Parser *parser, Allocator *allocator, 
             break;
         }
         case JSON_TOKEN_OPEN_BRACE: {
-            json_parse_object(parser, allocator, element);
+            json_parse_object(parser, arena, element);
             break;
         }
         case JSON_TOKEN_OPEN_BRACKET: {
-            json_parse_array(parser, allocator, element);
+            json_parse_array(parser, arena, element);
             break;
         }
         default: { 
@@ -183,7 +188,7 @@ static void json_element_init(JSON_Element *element) {
     *element = (JSON_Element){0};
 }
 
-static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Element *parent) {
+static void json_parse_array(JSON_Parser *parser, Arena *arena, JSON_Element *parent) {
     parent->type = JSON_TYPE_ARRAY;
 
     JSON_Element *current = parent->child;
@@ -194,9 +199,9 @@ static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Ele
     }
 
     while (true) {
-        JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+        JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
 
-        json_parse_element_value(parser, allocator, element, token);
+        json_parse_element_value(parser, arena, element, token);
 
         if (parser->state == JSON_STATUS_FAILED) {
             break;
@@ -222,7 +227,7 @@ static void json_parse_array(JSON_Parser *parser, Allocator *allocator, JSON_Ele
     }
 }
 
-static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_Element *parent) {
+static void json_parse_object(JSON_Parser *parser, Arena *arena, JSON_Element *parent) {
     parent->type = JSON_TYPE_OBJECT;
 
     JSON_Element *current = parent->child;
@@ -239,7 +244,7 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
     }
 
     while (true) {
-        JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+        JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
         element->key = element_key;
         
         if (!json_require_token(parser, JSON_TOKEN_COLON)) {
@@ -247,7 +252,7 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
         }
 
         JSON_Token token_value = json_get_token(parser);
-        json_parse_element_value(parser, allocator, element, token_value);
+        json_parse_element_value(parser, arena, element, token_value);
 
         if (parser->state == JSON_STATUS_FAILED) {
             break;
@@ -279,7 +284,7 @@ static void json_parse_object(JSON_Parser *parser, Allocator *allocator, JSON_El
     }
 }
 
-JSON_Parser_State json_parse(Allocator *allocator, String json_str, JSON_Element *json) {
+JSON_Parser_State json_parse(Arena *arena, String json_str, JSON_Element *json) {
     JSON_Parser parser = {0};
     parser.state = JSON_STATUS_SUCCESS;
     parser.json_str = json_str;
@@ -288,9 +293,9 @@ JSON_Parser_State json_parse(Allocator *allocator, String json_str, JSON_Element
 
     JSON_Token token = json_get_token(&parser);
     if (token.type == JSON_TOKEN_OPEN_BRACKET) {
-        json_parse_array(&parser, allocator, json);
+        json_parse_array(&parser, arena, json);
     } else if (token.type == JSON_TOKEN_OPEN_BRACE) {
-        json_parse_object(&parser, allocator, json);
+        json_parse_object(&parser, arena, json);
     } else {
         parser.state = JSON_STATUS_FAILED;
     }
@@ -298,9 +303,9 @@ JSON_Parser_State json_parse(Allocator *allocator, String json_str, JSON_Element
     return parser.state;
 };
 
-JSON_Parser_State json_parse_cstr(Allocator *allocator, char *json_cstr, size_t json_size, JSON_Element *json) {
+JSON_Parser_State json_parse_cstr(Arena *arena, char *json_cstr, size_t json_size, JSON_Element *json) {
     String json_str = string_with_len(json_cstr, json_size);
-    return json_parse(allocator, json_str, json);
+    return json_parse(arena, json_str, json);
 };
 
 b32 json_is_object(JSON_Element *element) {
@@ -348,40 +353,40 @@ JSON_Element *json_object_get(JSON_Element *object, String key) {
     return NULL;
 }
 
-JSON_Element *json_create_object(Allocator *allocator) {
-    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+JSON_Element *json_create_object(Arena *arena) {
+    JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
     element->type = JSON_TYPE_OBJECT;
     return element;
 }
 
-JSON_Element *json_create_array(Allocator *allocator) {
-    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+JSON_Element *json_create_array(Arena *arena) {
+    JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
     element->type = JSON_TYPE_ARRAY;
     return element;
 }
 
-JSON_Element *json_create_null(Allocator *allocator) {
-    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+JSON_Element *json_create_null(Arena *arena) {
+    JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
     element->type = JSON_TYPE_NULL;
     return element;
 }
 
-JSON_Element *json_create_number(Allocator *allocator, f64 number) {
-    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+JSON_Element *json_create_number(Arena *arena, f64 number) {
+    JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
     element->type = JSON_TYPE_NUMBER;
     element->value.number = number;
     return element;
 }
 
-JSON_Element *json_create_string(Allocator *allocator, String string) {
-    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+JSON_Element *json_create_string(Arena *arena, String string) {
+    JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
     element->type = JSON_TYPE_STRING;
     element->value.string = string;
     return element;
 }
 
-JSON_Element *json_create_boolean(Allocator *allocator, b32 boolean) {
-    JSON_Element *element = allocator_alloc(allocator, sizeof(JSON_Element));
+JSON_Element *json_create_boolean(Arena *arena, b32 boolean) {
+    JSON_Element *element = arena_alloc(arena, sizeof(JSON_Element));
     element->type = JSON_TYPE_BOOLEAN;
     element->value.boolean = boolean;
     return element;
@@ -399,29 +404,29 @@ void json_object_add(JSON_Element *object, JSON_Element *value) {
     }
 }
 
-void json_object_add_string(JSON_Element *object, String key, String value, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_object_add_string(JSON_Element *object, String key, String value, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->key = key;
     new_element->value.string = value;
     json_object_add(object, new_element);
 }
 
-void json_object_add_number(JSON_Element *object, String key, f64 value, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_object_add_number(JSON_Element *object, String key, f64 value, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->key = key;
     new_element->value.number = value;
     json_object_add(object, new_element);
 }
 
-void json_object_add_boolean(JSON_Element *object, String key, b32 value, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_object_add_boolean(JSON_Element *object, String key, b32 value, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->key = key;
     new_element->value.boolean = value;
     json_object_add(object, new_element);
 }
 
-void json_object_add_null(JSON_Element *object, String key, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_object_add_null(JSON_Element *object, String key, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->key = key;
     new_element->value.null = NULL;
     json_object_add(object, new_element);
@@ -431,34 +436,34 @@ void json_array_add(JSON_Element *array, JSON_Element *element) {
     json_object_add(array, element);
 }
 
-void json_array_add_string(JSON_Element *array, String value, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_array_add_string(JSON_Element *array, String value, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->value.string = value;
     json_array_add(array, new_element);
 }
 
-void json_array_add_number(JSON_Element *array, f64 value, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_array_add_number(JSON_Element *array, f64 value, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->value.number = value;
     json_array_add(array, new_element);
 }
 
-void json_array_add_boolean(JSON_Element *array, b32 value, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_array_add_boolean(JSON_Element *array, b32 value, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->value.boolean = value;
     json_array_add(array, new_element);
 }
 
-void json_array_add_null(JSON_Element *array, Allocator *allocator) {
-    JSON_Element *new_element = allocator_alloc(allocator, sizeof(JSON_Element));
+void json_array_add_null(JSON_Element *array, Arena *arena) {
+    JSON_Element *new_element = arena_alloc(arena, sizeof(JSON_Element));
     new_element->value.null = NULL;
     json_array_add(array, new_element);
 }
 
-static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *element, b32 is_object) {
+static u32 json_append_element_as_string(Arena *arena, JSON_Element *element, b32 is_object) {
     u32 object_size = 2;
 
-    char *open = allocator_alloc_aligned(allocator, 1, 1);
+    char *open = arena_alloc_aligned(arena, 1, 1);
     open[0] = is_object ? '{' : '[';
 
     if (element->child) {
@@ -468,7 +473,7 @@ static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *ele
             if (is_object) {
                 // key
                 u32 str_size = item->key.size + 3;
-                char *str_buff = allocator_alloc_aligned(allocator, str_size, 1);
+                char *str_buff = arena_alloc_aligned(arena, str_size, 1);
 
                 str_buff[0] = '"';
                 memcpy(str_buff + 1, item->key.data, str_size);
@@ -482,7 +487,7 @@ static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *ele
             switch (item->type) {
                 case JSON_TYPE_STRING: {
                     u32 str_size = item->value.string.size + 2;
-                    char *str_buff = allocator_alloc_aligned(allocator, str_size, 1);
+                    char *str_buff = arena_alloc_aligned(arena, str_size, 1);
 
                     str_buff[0] = '"';
                     memcpy(str_buff + 1, item->value.string.data, str_size);
@@ -492,12 +497,12 @@ static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *ele
                     break;
                 }
                 case JSON_TYPE_NUMBER: {
-                    String number = string_from_f64(allocator, item->value.number, 2);
+                    String number = string_from_f64(arena, item->value.number, 2);
                     object_size += number.size;
                     break;
                 }
                 case JSON_TYPE_NULL: {
-                    char *null_buff = allocator_alloc_aligned(allocator, 4, 1);
+                    char *null_buff = arena_alloc_aligned(arena, 4, 1);
 
                     memcpy(null_buff, "null", 4);
 
@@ -508,11 +513,11 @@ static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *ele
                     u32 size;
                     if (item->value.boolean) {
                         size = 4;
-                        char *buff = allocator_alloc_aligned(allocator, size, 1);
+                        char *buff = arena_alloc_aligned(arena, size, 1);
                         memcpy(buff, "true", size);
                     } else {
                         size = 5;
-                        char *buff = allocator_alloc_aligned(allocator, size, 1);
+                        char *buff = arena_alloc_aligned(arena, size, 1);
                         memcpy(buff, "false", size);
                     }
 
@@ -520,39 +525,39 @@ static u32 json_append_element_as_string(Allocator *allocator, JSON_Element *ele
                     break;
                 }
                 case JSON_TYPE_OBJECT: {
-                    object_size += json_append_element_as_string(allocator, item, true);
+                    object_size += json_append_element_as_string(arena, item, true);
                     break;
                 }
                 case JSON_TYPE_ARRAY: {
-                    object_size += json_append_element_as_string(allocator, item, false);
+                    object_size += json_append_element_as_string(arena, item, false);
                     break;
                 }
             }
 
             if (item->next) {
-                char *comma_buff = allocator_alloc_aligned(allocator, 1, 1);
+                char *comma_buff = arena_alloc_aligned(arena, 1, 1);
                 comma_buff[0] = ',';
                 object_size += 1;
             }
         }
     }
 
-    char *close = allocator_alloc_aligned(allocator, 1, 1);
+    char *close = arena_alloc_aligned(arena, 1, 1);
     close[0] = is_object ? '}' : ']';
 
     return object_size;
 }
 
-String json_to_string(Allocator *allocator, JSON_Element *json) {
+String json_to_string(Arena *arena, JSON_Element *json) {
     String result = {0};
 
     if (json != NULL) {
-        result.data = allocator_alloc_aligned(allocator, 0, 1);
+        result.data = arena_alloc_aligned(arena, 0, 1);
 
         if (json->type == JSON_TYPE_OBJECT) {
-            result.size = json_append_element_as_string(allocator, json, true);
+            result.size = json_append_element_as_string(arena, json, true);
         } else if (json->type == JSON_TYPE_ARRAY) {
-            result.size = json_append_element_as_string(allocator, json, true);
+            result.size = json_append_element_as_string(arena, json, true);
         }
     }
 

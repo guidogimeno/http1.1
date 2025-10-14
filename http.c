@@ -21,22 +21,22 @@ static i32 events_remove_fd(i32 events_fd, i32 fd);
 static void connection_init(Connection *connection, i32 fd, struct sockaddr_in address);
 static i32 connection_write(Connection *connection, Response response);
 
-static String encode_response(Allocator *allocator, Response response);
+static String encode_response(Arena *arena, Response response);
 
-static void parser_init(Parser *parser, Allocator *allocator);
+static void parser_init(Parser *parser, Arena *arena);
 static char parser_get_char(Parser *parser);
 static Parser_Buffer *parser_push_buffer(Parser *parser);
 static u32 parser_parse_request(Parser *parser, Request *request);
 
-static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allocator, String pattern_str);
-static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param);
+static void pattern_parser_parse(Pattern_Parser *pattern_parser, Arena *arena, String pattern_str);
+static void pattern_parser_add_segment(Pattern_Parser *parser, Arena *arena, String segment, bool is_path_param);
 
 static String http_status_reason(u16 status);
 
 static void request_init(Request *request);
-static void request_add_uri_segments(Request *request, Allocator *allocator, String uri);
-static void request_add_segment_literal(Request *request, Allocator *allocator, String literal);
-static void request_add_query_param(Request *request, Allocator *allocator, String key, String value);
+static void request_add_uri_segments(Request *request, Arena *arena, String uri);
+static void request_add_segment_literal(Request *request, Arena *arena, String literal);
+static void request_add_query_param(Request *request, Arena *arena, String key, String value);
 
 static void response_init(Response *response);
 
@@ -46,11 +46,11 @@ static void headers_put(Headers_Map *headers_map, String field_name, String fiel
 
 static volatile bool main_running = true;
 
-Server *http_server_make(Allocator *allocator) {
-    Server *server = allocator_alloc(allocator, sizeof(Server));
+Server *http_server_make(Arena *arena) {
+    Server *server = arena_alloc(arena, sizeof(Server));
 
     *server = (Server){0};
-    server->allocator = allocator;
+    server->arena = arena;
 
     return server;
 }
@@ -66,7 +66,7 @@ void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
     }
 
     Pattern_Parser parser = {0}; 
-    pattern_parser_parse(&parser, server->allocator, pattern_str);
+    pattern_parser_parse(&parser, server->arena, pattern_str);
 
     if (parser.state == PATTERN_PARSER_STATE_FAILED || parser.state != PATTERN_PARSER_STATE_FINISHED) {
         panic_with_msg("http_server_handle failed to parse pattern" );
@@ -85,7 +85,7 @@ void http_server_handle(Server *server, char *pattern, Http_Handler *handler) {
  *
  * Esto crea una lista de segmentos dentro del parser.
  */
-static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allocator, String pattern_str) {
+static void pattern_parser_parse(Pattern_Parser *pattern_parser, Arena *arena, String pattern_str) {
  
     pattern_parser->state = PATTERN_PARSER_STATE_STARTED;
 
@@ -116,7 +116,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
                     string_eq(method, string_lit("POST")) ||
                     string_eq(method, string_lit("DELETE"))) {
 
-                    pattern_parser_add_segment(pattern_parser, allocator, method, false);
+                    pattern_parser_add_segment(pattern_parser, arena, method, false);
                     pattern_parser->state = PATTERN_PARSER_STATE_PARSING_SLASH;
 
                 } else {
@@ -160,7 +160,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
                 }
 
                 String segment = string_with_len(pattern_str.data + slash_pos + 1, i - slash_pos - 1);
-                pattern_parser_add_segment(pattern_parser, allocator, segment, false);
+                pattern_parser_add_segment(pattern_parser, arena, segment, false);
 
                 slash_pos = i;
 
@@ -181,7 +181,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
                 }
 
                 String segment = string_with_len(pattern_str.data + open_brace_pos + 1, i - open_brace_pos - 1);
-                pattern_parser_add_segment(pattern_parser, allocator, segment, true);
+                pattern_parser_add_segment(pattern_parser, arena, segment, true);
 
                 if (i == pattern_str.size -1) {
                     pattern_parser->state = PATTERN_PARSER_STATE_FINISHED;
@@ -202,14 +202,14 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Allocator *allo
         pattern_parser->state == PATTERN_PARSER_STATE_PARSING_SLASH) {
 
         String segment = string_with_len(pattern_str.data + slash_pos + 1, pattern_str.size - slash_pos - 1);
-        pattern_parser_add_segment(pattern_parser, allocator, segment, false);
+        pattern_parser_add_segment(pattern_parser, arena, segment, false);
 
         pattern_parser->state = PATTERN_PARSER_STATE_FINISHED;
     }
 }
 
-static void pattern_parser_add_segment(Pattern_Parser *parser, Allocator *allocator, String segment, bool is_path_param) {
-    Segment_Pattern *segment_pattern = allocator_alloc(allocator, sizeof(Segment_Pattern));
+static void pattern_parser_add_segment(Pattern_Parser *parser, Arena *arena, String segment, bool is_path_param) {
+    Segment_Pattern *segment_pattern = arena_alloc(arena, sizeof(Segment_Pattern));
     segment_pattern->segment = segment;
     segment_pattern->is_path_param = is_path_param;
     segment_pattern->handler = NULL;
@@ -255,13 +255,13 @@ i32 http_server_start(Server *server, u32 port, char *host) {
     server->fd = server_fd;
     server->events_fd = events_fd;
     server->connections_count = MAX_CONNECTIONS;
-    server->connections = allocator_alloc(server->allocator, sizeof(Connection) * server->connections_count);
+    server->connections = arena_alloc(server->arena, sizeof(Connection) * server->connections_count);
 
     while (main_running) {
 
         i32 events_count;
 #if OS_MAC
-        events_count = kevent(events_fd, NULL, 0, eventlist, MAX_EVENTS,	NULL);
+        events_count = kevent(events_fd, NULL, 0, eventlist, MAX_EVENTS, NULL);
 #else
         events_count = epoll_wait(events_fd, epoll_events, MAX_EVENTS, -1);
 #endif
@@ -466,10 +466,10 @@ static void server_accept_client(Server *server) {
 
     connection_init(connection, client_fd, client_addr);
 
+    // TODO: Esto deberia quedar en un archivo de log
     printf("Nuevo cliente aceptado: %.*s:%d\n", string_print(connection->host),
             connection->port);
 }
-
 
 static Connection *server_find_connection(Server *server, i32 fd) {
     for (u32 i = 0; i < server->connections_count; i++) {
@@ -492,10 +492,10 @@ static Connection *server_find_free_connection(Server *server) {
 }
 
 static void connection_init(Connection *connection, i32 fd, struct sockaddr_in address) {
-    if (connection->allocator == NULL) {
-        connection->allocator = allocator_make(1 * MB);
+    if (connection->arena == NULL) {
+        connection->arena = arena_make(1 * MB);
     } else {
-        allocator_reset(connection->allocator);
+        arena_reset(connection->arena);
     }
 
     connection->fd = fd;
@@ -507,7 +507,7 @@ static void connection_init(Connection *connection, i32 fd, struct sockaddr_in a
     connection->keep_alive = false;
     connection->request = (Request){0};
     headers_init(&connection->request.headers_map);
-    parser_init(&connection->parser, connection->allocator);
+    parser_init(&connection->parser, connection->arena);
 }
 
 static bool server_handle_connection(Server *server, Connection *connection) {
@@ -520,6 +520,12 @@ static bool server_handle_connection(Server *server, Connection *connection) {
 
         parser->bytes_read = read(connection->fd, buffer->data, buffer->size);
         if (parser->bytes_read < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return false;
+            } else {
+                return true;
+            }
+        } else if (parser->bytes_read == 0) {
             return true;
         }
 
@@ -539,7 +545,8 @@ static bool server_handle_connection(Server *server, Connection *connection) {
                     if (connection_value == NULL) {
                         connection->keep_alive = string_eq(request->version, HTTP_VERSION_11);
                     } else {
-                        connection->keep_alive = string_eq(*connection_value, string_lit("Close"));
+                        String connection_value_lower = string_to_lower(connection->arena, *connection_value);
+                        connection->keep_alive = string_eq(connection_value_lower, string_lit("keep-alive"));
                     }
                 
                     Response response;
@@ -719,9 +726,9 @@ static Http_Handler *find_handler_while_adding_path_params(Segment_Pattern **req
 }
 
 static i32 connection_write(Connection *connection, Response response) {
-    Allocator *allocator = connection->allocator;
+    Arena *arena = connection->arena;
 
-    String content_lenght_value = string_from_i64(allocator, response.body.size);
+    String content_lenght_value = string_from_i64(arena, response.body.size);
     String connection_value;
 
     if (connection->keep_alive) {
@@ -733,28 +740,31 @@ static i32 connection_write(Connection *connection, Response response) {
     headers_put(&response.headers, string_lit("Content-Length"), content_lenght_value);
     headers_put(&response.headers, string_lit("Connection"), connection_value);
 
-    String encoded_response = encode_response(allocator, response);
+    String encoded_response = encode_response(arena, response);
 
+    // TODO: Esto deberia estar en un loop por temas de escritura parcial
     i32 bytes_sent = write(connection->fd, encoded_response.data, encoded_response.size);
 
     if (bytes_sent == -1) {
+        printf("[ERROR] connection_write - error al escribir en la conexion\n");
         return -1;
     }
 
     if (bytes_sent != encoded_response.size) {
+        printf("[ERROR] connection_write - escritura parcial\n");
         return -1;
     }
 
     return 0;
 }
 
-static String encode_response(Allocator *allocator, Response response) {
+static String encode_response(Arena *arena, Response response) {
     String line_separator = string_lit("\r\n");
     String colon_separator = string_lit(": ");
     String space_separator = string_lit(" ");
 
     String version = string_lit("HTTP/1.1 ");
-    String status = string_from_i64(allocator, response.status);
+    String status = string_from_i64(arena, response.status);
     String status_description = http_status_reason(response.status);
     String body = string_with_len((char *)response.body.data, response.body.size);
 
@@ -774,7 +784,7 @@ static String encode_response(Allocator *allocator, Response response) {
     }
 
     String_Builder builder = {0};
-    sbuilder_init_cap(&builder, allocator, response_minimum_size);
+    sbuilder_init_cap(&builder, arena, response_minimum_size);
     sbuilder_append(&builder, version);
     sbuilder_append(&builder, status);
     sbuilder_append(&builder, space_separator);
@@ -803,7 +813,7 @@ static String encode_response(Allocator *allocator, Response response) {
 static i32 events_add_fd(i32 events_fd, i32 fd) {
 #if OS_MAC
     struct kevent changelist[1];
-    EV_SET(changelist, fd, EVFILT_READ, EV_ADD|EV_ENABLE, 0, 0, 0);
+    EV_SET(changelist, fd, EVFILT_READ, EV_ADD, 0, 0, 0);
     return kevent(events_fd, changelist, 1, NULL, 0, NULL);
 #else
     struct epoll_event event;
@@ -814,18 +824,24 @@ static i32 events_add_fd(i32 events_fd, i32 fd) {
 }
 
 static i32 events_remove_fd(i32 events_fd, i32 fd) {
-#if !OS_MAC
-    i32 res = epoll_ctl(events_fd, EPOLL_CTL_DEL, fd, NULL);
+    i32 res;
+#if OS_MAC
+    struct kevent kev;
+    EV_SET(&kev, fd, EVFILT_READ, EV_DELETE, 0, 0, 0);
+    res = kevent(events_fd, &kev, 1, NULL, 0, NULL);
+#else
+    res = epoll_ctl(events_fd, EPOLL_CTL_DEL, fd, NULL);
+#endif
     if (res == -1) {
         return -1;
+    } else {
+        return close(fd);
     }
-#endif
-    return close(fd);
 }
 
-static void parser_init(Parser *parser, Allocator * allocator) {
+static void parser_init(Parser *parser, Arena * arena) {
     *parser = (Parser){0};
-    parser->allocator = allocator;
+    parser->arena = arena;
     parser->bytes_read = 0;
     parser->first_buffer = NULL;
     parser->last_buffer = NULL;
@@ -857,7 +873,7 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
     if (first_buffer == last_buffer) {
         u32 total_size = last_buffer_offset - parser->marked_at + 1;
 
-        void *data = allocator_alloc(parser->allocator, total_size);
+        void *data = arena_alloc(parser->arena, total_size);
 
         memcpy(data, first_buffer_offset, total_size);
 
@@ -876,7 +892,7 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
 
     u32 total_size = first_buffer_remaining_size + middle_buffers_size - surplus_buffer_size;
 
-    void *data = allocator_alloc(parser->allocator, total_size);
+    void *data = arena_alloc(parser->arena, total_size);
     void *next_memcpy = data;
 
     memcpy(next_memcpy, first_buffer_offset, first_buffer_remaining_size);
@@ -900,7 +916,7 @@ static String parser_extract_block(Parser *parser, u32 last_buffer_offset) {
 }
 
 static Parser_Buffer *parser_push_buffer(Parser *parser) {
-    void *memory = allocator_alloc(parser->allocator, 
+    void *memory = arena_alloc(parser->arena, 
                         sizeof(Parser_Buffer) + MAX_PARSER_BUFFER_CAPACITY);
 
     Parser_Buffer *new_buffer = (Parser_Buffer *)memory;
@@ -957,7 +973,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                     string_eq(method, string_lit("DELETE"))) {
 
                     request->method = method;
-                    request_add_segment_literal(request, parser->allocator, method);
+                    request_add_segment_literal(request, parser->arena, method);
                     parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_URI;
 
                 } else {
@@ -992,7 +1008,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                 String uri = parser_extract_block(parser, parser->at - 1);
                 request->uri = uri;
 
-                request_add_uri_segments(request, parser->allocator, uri);
+                request_add_uri_segments(request, parser->arena, uri);
 
                 parser->state = PARSER_STATE_PARSING_SPACE_BEFORE_VERSION;
 
@@ -1078,7 +1094,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                 }
 
                 String key = parser_extract_block(parser, parser->at - 1);
-                parser->header_name = string_to_lower(parser->allocator, key);
+                parser->header_name = string_to_lower(parser->arena, key);
 
                 parser->state = PARSER_STATE_PARSING_HEADER_SPACE;
 
@@ -1221,7 +1237,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
     return parser->at - parser_start_position;
 }
 
-static void request_add_uri_segments(Request *request, Allocator *allocator, String uri) {
+static void request_add_uri_segments(Request *request, Arena *arena, String uri) {
 
     u32 i = 1;
 
@@ -1230,7 +1246,7 @@ static void request_add_uri_segments(Request *request, Allocator *allocator, Str
         // Si el path es unicamente: '/'
         if (uri.data[0] == '/' && (uri.size == 1 || (uri.size > 1 && uri.data[1] == '?'))) {
 
-            request_add_segment_literal(request, allocator, string_lit(""));
+            request_add_segment_literal(request, arena, string_lit(""));
 
         } else {
 
@@ -1240,7 +1256,7 @@ static void request_add_uri_segments(Request *request, Allocator *allocator, Str
 
                 if (uri.data[i] == '/') {
                     String segment = string_with_len(uri.data + start, i - start);
-                    request_add_segment_literal(request, allocator, segment);
+                    request_add_segment_literal(request, arena, segment);
                     start = i + 1;
                 }
 
@@ -1259,7 +1275,7 @@ static void request_add_uri_segments(Request *request, Allocator *allocator, Str
                     segment = string_with_len(uri.data + start, i - start);
                 }
 
-                request_add_segment_literal(request, allocator, segment);
+                request_add_segment_literal(request, arena, segment);
             }
         }
     }
@@ -1287,7 +1303,7 @@ static void request_add_uri_segments(Request *request, Allocator *allocator, Str
                 } else if (c == '&') {
 
                     String query_value = string_with_len(uri.data + value_pos, i - value_pos);
-                    request_add_query_param(request, allocator, query_key, query_value);
+                    request_add_query_param(request, arena, query_key, query_value);
 
                     key_pos = i + 1;
                 }
@@ -1297,13 +1313,13 @@ static void request_add_uri_segments(Request *request, Allocator *allocator, Str
 
             // Remanente
             String query_value = string_with_len(uri.data + value_pos, i - value_pos);
-            request_add_query_param(request, allocator, query_key, query_value);
+            request_add_query_param(request, arena, query_key, query_value);
         }
     }
 }
 
-static void request_add_query_param(Request *request, Allocator *allocator, String key, String value) {
-    Query_Param *query_param = allocator_alloc(allocator, sizeof(Query_Param));
+static void request_add_query_param(Request *request, Arena *arena, String key, String value) {
+    Query_Param *query_param = arena_alloc(arena, sizeof(Query_Param));
     *query_param = (Query_Param){0};
     query_param->next = NULL;
     query_param->key = key;
@@ -1317,8 +1333,8 @@ static void request_add_query_param(Request *request, Allocator *allocator, Stri
     request->last_query_param = query_param;
 }
 
-static void request_add_segment_literal(Request *request, Allocator *allocator, String literal) {
-    Segment_Pattern *segment = allocator_alloc(allocator, sizeof(Segment_Pattern));
+static void request_add_segment_literal(Request *request, Arena *arena, String literal) {
+    Segment_Pattern *segment = arena_alloc(arena, sizeof(Segment_Pattern));
     *segment = (Segment_Pattern){0};
     segment->segment = literal;
     segment->is_path_param = false;

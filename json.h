@@ -65,10 +65,10 @@ struct JSON_Token{
     String value;
 };
 
-JSON_Parser_State json_parse(Allocator *allocator, String json_str, JSON_Element *json);
-JSON_Parser_State json_parse_cstr(Allocator *allocator, char *json_str, size_t json_size, JSON_Element *json);
+JSON_Parser_State json_parse(Arena *arena, String json_str, JSON_Element *json);
+JSON_Parser_State json_parse_cstr(Arena *arena, char *json_str, size_t json_size, JSON_Element *json);
 
-String json_to_string(Allocator *allocator, JSON_Element *json);
+String json_to_string(Arena *arena, JSON_Element *json);
 
 b32 json_is_object(JSON_Element *element);
 b32 json_is_array(JSON_Element *element);
@@ -84,22 +84,22 @@ JSON_Element *json_object_get(JSON_Element *object, String key);
 #define json_for_each(element, parent) \
     for (JSON_Element *element = parent->child; element != NULL; element = element->next) \
 
-JSON_Element *json_create_object(Allocator *allocator);
-JSON_Element *json_create_array(Allocator *allocator);
-JSON_Element *json_create_null(Allocator *allocator);
-JSON_Element *json_create_number(Allocator *allocator, f64 number);
-JSON_Element *json_create_string(Allocator *allocator, String string);
-JSON_Element *json_create_boolean(Allocator *allocator, b32 boolean);
+JSON_Element *json_create_object(Arena *arena);
+JSON_Element *json_create_array(Arena *arena);
+JSON_Element *json_create_null(Arena *arena);
+JSON_Element *json_create_number(Arena *arena, f64 number);
+JSON_Element *json_create_string(Arena *arena, String string);
+JSON_Element *json_create_boolean(Arena *arena, b32 boolean);
 
 void json_object_add(JSON_Element *object, JSON_Element *value);
-void json_object_add_string(JSON_Element *object, String key, String value, Allocator *allocator);
-void json_object_add_number(JSON_Element *object, String key, f64 value, Allocator *allocator);
-void json_object_add_boolean(JSON_Element *object, String key, b32 value, Allocator *allocator);
-void json_object_add_null(JSON_Element *object, String key, Allocator *allocator);
+void json_object_add_string(JSON_Element *object, String key, String value, Arena *arena);
+void json_object_add_number(JSON_Element *object, String key, f64 value, Arena *arena);
+void json_object_add_boolean(JSON_Element *object, String key, b32 value, Arena *arena);
+void json_object_add_null(JSON_Element *object, String key, Arena *arena);
 
 void json_array_add(JSON_Element *array, JSON_Element *element);
-void json_array_add_string(JSON_Element *array, String value, Allocator *allocator);
-void json_array_add_number(JSON_Element *array, f64 value, Allocator *allocator);
-void json_array_add_boolean(JSON_Element *array, b32 value, Allocator *allocator);
-void json_array_add_null(JSON_Element *array, Allocator *allocator);
+void json_array_add_string(JSON_Element *array, String value, Arena *arena);
+void json_array_add_number(JSON_Element *array, f64 value, Arena *arena);
+void json_array_add_boolean(JSON_Element *array, b32 value, Arena *arena);
+void json_array_add_null(JSON_Element *array, Arena *arena);
 

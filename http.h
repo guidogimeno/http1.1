@@ -31,9 +31,9 @@
 #define HTTP_VERSION_10 string_lit("HTTP/1.0")
 #define HTTP_VERSION_11 string_lit("HTTP/1.1")
 
-#define MAX_CONNECTIONS 512
+#define MAX_CONNECTIONS 128
 #define MAX_EVENTS 100
-#define MAX_PARSER_BUFFER_CAPACITY 4
+#define MAX_PARSER_BUFFER_CAPACITY 8 * KB
 #define MAX_HEADERS_CAPACITY 32
 
 typedef struct Server Server;
@@ -118,7 +118,7 @@ struct Parser_Buffer {
 };
 
 struct Parser {
-    Allocator *allocator;
+    Arena *arena;
 
     Parser_State state;
 
@@ -186,7 +186,7 @@ enum Connection_State {
 };
 
 struct Connection {
-    Allocator *allocator;
+    Arena *arena;
 
     Connection_State state;
 
@@ -204,7 +204,7 @@ struct Connection {
 };
 
 struct Server {
-    Allocator *allocator;
+    Arena *arena;
 
     i32 fd;
 
@@ -216,7 +216,7 @@ struct Server {
     Segment_Pattern *patterns_tree;
 };
 
-Server *http_server_make(Allocator *allocator);
+Server *http_server_make(Arena *arena);
 void http_server_handle(Server *server, char *pattern, Http_Handler *handler);
 i32 http_server_start(Server *server, u32 port, char *host);
 
