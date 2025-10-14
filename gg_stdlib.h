@@ -38,11 +38,6 @@ typedef double f64;
     exit(EXIT_FAILURE); \
 } while (0);
 
-#define panic() do { \
-    fprintf(stderr, "panic at %s:%d\n", __FILE__, __LINE__); \
-    exit(EXIT_FAILURE); \
-} while (0);
-
 f32 math_exp(f32 a) {
     union { f32 f; f32 i; } u, v;
     u.i = (i32)(6051102.0f * a + 1056478197.0f);
@@ -71,56 +66,57 @@ f32 math_pow(f32 a, f32 b) {
     return flipped ? 1.0f/r : r;
 }
 
+#define array_size(arr) (sizeof(arr)/sizeof((arr)[0]))
 
 
 // ###################################
-// ### Allocators ####################
+// ### Arenas ####################
 // ###################################
 
 #define MAX_SCRATCH_COUNT 2
 
 #define DEFAULT_ALIGNMENT (2*sizeof(void *))
 
-typedef struct Allocator Allocator;
-typedef struct Allocator_Temp Allocator_Temp;
+typedef struct Arena Arena;
+typedef struct Arena_Temp Arena_Temp;
 
-struct Allocator {
+struct Arena {
     u8  *data;
     u64 size;
     u64 capacity;
 };
 
-struct Allocator_Temp {
-    Allocator *allocator;
+struct Arena_Temp {
+    Arena *arena;
     u32       position;
 };
 
-__thread Allocator *thread_local_allocators_pool[MAX_SCRATCH_COUNT] = {0, 0};
+__thread Arena *thread_local_arenas_pool[MAX_SCRATCH_COUNT] = {0, 0};
 
-Allocator *allocator_make(u64 capacity);
-void *allocator_alloc(Allocator *allocator, u64 size);
-void *allocator_alloc_aligned(Allocator *allocator, u64 size, size_t align);
-void allocator_reset(Allocator *allocator);
-void allocator_destroy(Allocator *allocator);
+Arena *arena_make(u64 capacity);
+void *arena_alloc(Arena *arena, u64 size);
+void *arena_alloc_aligned(Arena *arena, u64 size, size_t align);
+void arena_reset(Arena *arena);
+void arena_destroy(Arena *arena);
 
-Allocator_Temp allocator_temp_begin(Allocator *allocator);
-void allocator_temp_end(Allocator_Temp allocator_temp);
+Arena_Temp arena_temp_begin(Arena *arena);
+void arena_temp_end(Arena_Temp arena_temp);
 
-Allocator_Temp get_scratch(Allocator **conflicts, u64 conflict_count);
-#define release_scratch(t) allocator_temp_end(t)
+Arena_Temp get_scratch(Arena **conflicts, u64 conflict_count);
+#define release_scratch(t) arena_temp_end(t)
 
-Allocator *allocator_make(u64 capacity) {
-    void *memory = mmap(0, sizeof(Allocator) + capacity, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+Arena *arena_make(u64 capacity) {
+    void *memory = mmap(0, sizeof(Arena) + capacity, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
     if (memory == (void *)-1) {
         panic_with_msg("mmap failed");
     }
 
-    Allocator *allocator = (Allocator *)memory;
-    allocator->data = memory + sizeof(Allocator);
-    allocator->capacity = capacity;
-    allocator->size = 0;
+    Arena *arena = (Arena *)memory;
+    arena->data = memory + sizeof(Arena);
+    arena->capacity = capacity;
+    arena->size = 0;
 
-    return allocator;
+    return arena;
 }
 
 static bool is_power_of_two(uintptr_t x) {
@@ -142,73 +138,73 @@ static uintptr_t align_forward(uintptr_t ptr, size_t align) {
 	return p;
 }
 
-void *allocator_alloc(Allocator *allocator, u64 size) {
-    return allocator_alloc_aligned(allocator, size, DEFAULT_ALIGNMENT);
+void *arena_alloc(Arena *arena, u64 size) {
+    return arena_alloc_aligned(arena, size, DEFAULT_ALIGNMENT);
 }
 
-void *allocator_alloc_aligned(Allocator *allocator, u64 size, size_t align) {
-    uintptr_t current_ptr = (uintptr_t)allocator->data + (uintptr_t)allocator->size;
+void *arena_alloc_aligned(Arena *arena, u64 size, size_t align) {
+    uintptr_t current_ptr = (uintptr_t)arena->data + (uintptr_t)arena->size;
     uintptr_t offset = align_forward(current_ptr, align);
-    offset -= (uintptr_t)allocator->data;
+    offset -= (uintptr_t)arena->data;
 
-    assert(offset + size <= allocator->capacity);
+    assert(offset + size <= arena->capacity);
 
-    void *result = &allocator->data[offset];
-    allocator->size = offset + size;
+    void *result = &arena->data[offset];
+    arena->size = offset + size;
 
     memset(result, 0, size);
 
     return result;
 }
 
-void allocator_reset(Allocator *allocator) {
-    allocator->size = 0;
+void arena_reset(Arena *arena) {
+    arena->size = 0;
 }
 
-void allocator_destroy(Allocator *allocator) {
-    munmap(allocator, allocator->capacity);
+void arena_destroy(Arena *arena) {
+    munmap(arena, arena->capacity);
 }
 
-Allocator_Temp allocator_temp_begin(Allocator *allocator) {
-    Allocator_Temp allocator_temp = {
-        .allocator = allocator,
-        .position = allocator->size,
+Arena_Temp arena_temp_begin(Arena *arena) {
+    Arena_Temp arena_temp = {
+        .arena = arena,
+        .position = arena->size,
     };
-    return allocator_temp;
+    return arena_temp;
 }
 
-void allocator_temp_end(Allocator_Temp allocator_temp) {
-    allocator_temp.allocator->size = allocator_temp.position;
+void arena_temp_end(Arena_Temp arena_temp) {
+    arena_temp.arena->size = arena_temp.position;
 }
 
-Allocator_Temp get_scratch(Allocator **conflicts, u64 conflict_count) {
-    if (thread_local_allocators_pool[0] == 0) {
+Arena_Temp get_scratch(Arena **conflicts, u64 conflict_count) {
+    if (thread_local_arenas_pool[0] == 0) {
         for (u32 i = 0; i < MAX_SCRATCH_COUNT; i++) {
-            thread_local_allocators_pool[i] = allocator_make(1 * MB); 
+            thread_local_arenas_pool[i] = arena_make(1 * MB); 
         }
     }
 
     if (conflict_count == 0) {
-        return allocator_temp_begin(thread_local_allocators_pool[0]);
+        return arena_temp_begin(thread_local_arenas_pool[0]);
     }
 
     for (u32 pool_index = 0; pool_index < MAX_SCRATCH_COUNT; pool_index++) {
-        Allocator *allocator = thread_local_allocators_pool[pool_index];
+        Arena *arena = thread_local_arenas_pool[pool_index];
 
         bool is_free = true;
         for (u32 conflict_index = 0; conflict_index < conflict_count; conflict_index++) {
-            if (allocator == conflicts[conflict_index]) {
+            if (arena == conflicts[conflict_index]) {
                 is_free = false;
                 break;
             }
         }
 
         if (is_free) {
-            return allocator_temp_begin(allocator);
+            return arena_temp_begin(arena);
         }
     }
 
-    return (Allocator_Temp){0};
+    return (Arena_Temp){0};
 }
 
 
@@ -233,7 +229,7 @@ struct String_Builder {
     u8 *data;
     u32 length;
     u32 capacity;
-    Allocator *allocator;
+    Arena *arena;
 };
 
 #define string_lit(char_pointer) string_with_len(char_pointer, sizeof(char_pointer) - 1)
@@ -251,18 +247,18 @@ bool string_eq(String s1, String s2);
 bool string_eq_cstr(String s1, char *s2);
 bool string_is_empty(String str);
 
-String string_to_lower(Allocator *a, String str);
-String string_to_upper(Allocator *a, String str);
-String string_from_b32(Allocator *a, b32 boolean);
-String string_from_i64(Allocator *a, i64 num);
-String string_from_f64(Allocator *a, f64 num, i32 precision);
+String string_to_lower(Arena *a, String str);
+String string_to_upper(Arena *a, String str);
+String string_from_b32(Arena *a, b32 boolean);
+String string_from_i64(Arena *a, i64 num);
+String string_from_f64(Arena *a, f64 num, i32 precision);
 i32 string_to_i32(String str);
 i64 string_to_i64(String str);
 f32 string_to_f32(String str);
 f64 string_to_f64(String str);
 
-String string_sub(Allocator *a, String *str, u32 start, u32 end); 
-String string_sub_cstr(Allocator *a, const char *text, u32 start, u32 end); 
+String string_sub(Arena *a, String *str, u32 start, u32 end); 
+String string_sub_cstr(Arena *a, const char *text, u32 start, u32 end); 
 String string_slice(String *str, u32 start, u32 offset);
 
 char char_to_lower(char c);
@@ -274,8 +270,8 @@ bool is_digit(char c);
 bool is_alphanum(char c);
 
 // String_Builder functions
-void   sbuilder_init(String_Builder *builder, Allocator *allocator);
-void   sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity); 
+void   sbuilder_init(String_Builder *builder, Arena *arena);
+void   sbuilder_init_cap(String_Builder *builder, Arena *arena, u32 capacity); 
 void   sbuilder_append(String_Builder *builder, String str);
 String sbuilder_to_string(String_Builder *sb);
 
@@ -354,11 +350,11 @@ bool cstr_eq(char *s1, char *s2) {
     return true;
 }
 
-String string_sub(Allocator *a, String *str, u32 start, u32 end) {
+String string_sub(Arena *a, String *str, u32 start, u32 end) {
     return string_sub_cstr(a, str->data, start, end);
 }
 
-String string_sub_cstr(Allocator *a, const char *text, u32 start, u32 end) {
+String string_sub_cstr(Arena *a, const char *text, u32 start, u32 end) {
     assert(text != NULL);
     assert(start >= 0);
     assert(end > 0);
@@ -366,7 +362,7 @@ String string_sub_cstr(Allocator *a, const char *text, u32 start, u32 end) {
 
     u32 len = end - start + 1;
 
-    char *dest = (char *)allocator_alloc(a, len);
+    char *dest = (char *)arena_alloc(a, len);
     dest = memcpy(dest, text + start, len);
 
     String str = {
@@ -390,9 +386,9 @@ String string_slice(String *str, u32 start, u32 offset) {
     return new_str;
 }
 
-String string_to_lower(Allocator *a, String str) {
+String string_to_lower(Arena *a, String str) {
 
-    char *dest = (char *)allocator_alloc(a, str.size);
+    char *dest = (char *)arena_alloc(a, str.size);
 
     for (u32 i = 0; i < str.size; i++) {
         char c = str.data[i];
@@ -411,9 +407,9 @@ String string_to_lower(Allocator *a, String str) {
     return new_str;
 }
 
-String string_to_upper(Allocator *a, String str) {
+String string_to_upper(Arena *a, String str) {
 
-    char *dest = (char *)allocator_alloc(a, str.size);
+    char *dest = (char *)arena_alloc(a, str.size);
 
     for (u32 i = 0; i < str.size; i++) {
         char c = str.data[i];
@@ -556,18 +552,18 @@ f32 string_to_f32(String string) {
     return (f32)string_to_f64(string);
 }
 
-String string_from_b32(Allocator *allocator, b32 boolean) {
+String string_from_b32(Arena *arena, b32 boolean) {
     String result;
     char *buff;
     u32 size;
 
     if (boolean) {
         size = 4;
-        buff = allocator_alloc(allocator, size);
+        buff = arena_alloc(arena, size);
         memcpy(buff, "true", size);
     } else {
         size = 5;
-        buff = allocator_alloc(allocator, size);
+        buff = arena_alloc(arena, size);
         memcpy(buff, "false", size);
     }
 
@@ -610,21 +606,21 @@ static const char two_digit_table[100][2] = {
 static const char int64_min_str[] = "-9223372036854775808";
 static const char int64_max_str[] = "9223372036854775807";
 
-String string_from_i64(Allocator *allocator, i64 num) {
+String string_from_i64(Arena *arena, i64 num) {
     if (num == 0) {
-        char *buf = (char *)allocator_alloc(allocator, 1);
+        char *buf = (char *)arena_alloc(arena, 1);
         buf[0] = '0';
         String str = { .data = buf, .size = 1 };
         return str;
     }
     if (num == INT64_MIN) {
-        char *buf = (char *)allocator_alloc(allocator, 20);
+        char *buf = (char *)arena_alloc(arena, 20);
         for (int i = 0; i < 20; i++) buf[i] = int64_min_str[i];
         String str = { .data = buf, .size = 20 };
         return str;
     }
     if (num == INT64_MAX) {
-        char *buf = (char *)allocator_alloc(allocator, 19);
+        char *buf = (char *)arena_alloc(arena, 19);
         for (int i = 0; i < 19; i++) buf[i] = int64_max_str[i];
         String str = { .data = buf, .size = 19 };
         return str;
@@ -640,7 +636,7 @@ String string_from_i64(Allocator *allocator, i64 num) {
         }
     }
 
-    char *buf = (char *)allocator_alloc(allocator, length);
+    char *buf = (char *)arena_alloc(arena, length);
     u32 i = length - 1;
 
     while (abs_num >= 100) {
@@ -669,7 +665,7 @@ String string_from_i64(Allocator *allocator, i64 num) {
     return str;
 }
 
-String string_from_f64(Allocator *a, f64 num, i32 precision) {
+String string_from_f64(Arena *a, f64 num, i32 precision) {
     if (precision < 0) {
         precision = 0;
     }
@@ -698,7 +694,7 @@ String string_from_f64(Allocator *a, f64 num, i32 precision) {
     u32 frac_total = (u32)(precision > 0 ? 1 + precision : 0);
     u32 length = (is_negative ? 1u : 0u) + int_len + frac_total;
 
-    char *buf = (char *)allocator_alloc_aligned(a, length, 1);
+    char *buf = (char *)arena_alloc_aligned(a, length, 1);
     u32 curr = 0;
 
     if (is_negative) {
@@ -787,18 +783,18 @@ bool is_alphanum(char c) {
            (c >= 'a' && c <= 'z');
 }
 
-void sbuilder_init_cap(String_Builder *builder, Allocator *allocator, u32 capacity) {
+void sbuilder_init_cap(String_Builder *builder, Arena *arena, u32 capacity) {
     builder->length = 0;
     builder->capacity = capacity;
-    builder->allocator = allocator;
+    builder->arena = arena;
 
     if (capacity > 0) {
-        builder->data = allocator_alloc(allocator, capacity);
+        builder->data = arena_alloc(arena, capacity);
     }
 }
 
-void sbuilder_init(String_Builder *builder, Allocator *allocator) {
-    sbuilder_init_cap(builder, allocator, STRING_BUILDER_DEFAULT_CAPACITY);
+void sbuilder_init(String_Builder *builder, Arena *arena) {
+    sbuilder_init_cap(builder, arena, STRING_BUILDER_DEFAULT_CAPACITY);
 }
 
 void sbuilder_append(String_Builder *builder, String str) {
@@ -813,7 +809,7 @@ void sbuilder_append(String_Builder *builder, String str) {
 
         printf("realocacion - capacidad anterior: %d capacidad nueva: %d\n", builder->capacity, new_capacity);
 
-        u8 *new_data = allocator_alloc(builder->allocator, new_capacity);
+        u8 *new_data = arena_alloc(builder->arena, new_capacity);
 
         memcpy(new_data, builder->data, builder->length);
 
@@ -849,7 +845,7 @@ struct DynamicArray {
     u64 capacity;
 };
 
-void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t item_size) {
+void dynamic_array_grow(Arena *arena, void *dynamic_array_ptr, size_t item_size) {
     DynamicArray *dynamic_array = (DynamicArray *)dynamic_array_ptr;
 
     if (dynamic_array->capacity <= 0) {
@@ -858,10 +854,10 @@ void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t it
 
     uintptr_t items_offset = dynamic_array->length * item_size;
 
-    if (allocator->data + allocator->size == dynamic_array->items + items_offset) {
-        allocator_alloc_aligned(allocator, dynamic_array->capacity * item_size, 1);
+    if (arena->data + arena->size == dynamic_array->items + items_offset) {
+        arena_alloc_aligned(arena, dynamic_array->capacity * item_size, 1);
     } else {
-        void *data = allocator_alloc(allocator, 2 * dynamic_array->capacity * item_size);
+        void *data = arena_alloc(arena, 2 * dynamic_array->capacity * item_size);
         if (dynamic_array->length > 0) {
             memcpy(data, dynamic_array->items, items_offset);
         }
@@ -871,9 +867,9 @@ void dynamic_array_grow(Allocator *allocator, void *dynamic_array_ptr, size_t it
     dynamic_array->capacity *= 2;
 }
 
-#define dynamic_array_append(allocator, dynamic_array) \
+#define dynamic_array_append(arena, dynamic_array) \
     ((dynamic_array)->length >= (dynamic_array)->capacity \
-     ? dynamic_array_grow(allocator, dynamic_array, sizeof(*(dynamic_array)->items)), \
+     ? dynamic_array_grow(arena, dynamic_array, sizeof(*(dynamic_array)->items)), \
        (dynamic_array)->items + (dynamic_array)->length++ \
      : (dynamic_array)->items + (dynamic_array)->length++)
 
