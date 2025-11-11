@@ -1,4 +1,8 @@
 #include "gg_stdlib.h"
+
+#include <arm_neon.h>
+
+#include "macos_layer.h"
 #include "app.h"
 
 #include "app.c"
@@ -6,6 +10,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <objc/NSObjCRuntime.h>
 #include <objc/objc-runtime.h>
+#include <mach/mach_time.h>
 
 #define cls(x) ((id)objc_getClass(x))
 #define sel(name) sel_getUid(name)
@@ -22,6 +27,8 @@
 
 extern id const NSDefaultRunLoopMode;
 extern id const NSApp;
+
+static mach_timebase_info_data_t macos_timebase;
 
 static void macos_draw_rect(id v, SEL s, CGRect r) {
     (void)r, (void)s;
@@ -63,10 +70,24 @@ static BOOL macos_should_close(id v, SEL s, id w) {
   return YES;
 }
 
-static i64 macos_time(void) {
-    struct timespec time;
-    clock_gettime(CLOCK_REALTIME, &time);
-    return time.tv_sec * 1000 + (time.tv_nsec / 1000000);
+static u64 macos_clock_time(void) {
+    return mach_absolute_time();
+}
+
+static u64 macos_perf_frequency(void) {
+    return (u64)macos_timebase.numer * 1000000000ULL / macos_timebase.denom;
+}
+
+static f32 macos_delta_seconds(u64 start, u64 end) {
+    u64 delta_ticks = end - start;
+    return (f32)((f64)delta_ticks / (f64)macos_perf_frequency()) * 1000.0f;
+}
+
+static void macos_sleep(u64 ms) {
+    u64 ns = ms * 1000000ULL;
+    u64 now = mach_absolute_time();
+    u64 deadline = now + (ns * macos_timebase.denom / macos_timebase.numer);
+    mach_wait_until(deadline);
 }
 
 static void process_keyboard_state(Key_State *key, bool key_down) {
@@ -76,34 +97,78 @@ static void process_keyboard_state(Key_State *key, bool key_down) {
     }
 }
 
+static u32 macos_monitor_hz() {
+    u32 result = 0;
+
+    CGDirectDisplayID main_display = CGMainDisplayID();
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(main_display);
+   
+    if (mode) {
+        result = (u32)CGDisplayModeGetRefreshRate(mode);
+        CGDisplayModeRelease(mode);
+    } else {
+        // TODO: log
+    }
+
+    return result;
+}
+
+static void handle_cycle_counters(void) {
+#if APP_INTERNAL
+    for (u32 i = 0; i < array_size(debug_global_memory->counters); i++) {
+        Debug_Cycle_Counter *counter = debug_global_memory->counters + i;
+        if (counter->hit_count) {
+            printf("  %d: cycles=%llu hits=%d cycles/hit=%llu\n",
+                    i,
+                    counter->cycle_count,
+                    counter->hit_count,
+                    counter->cycle_count / counter->hit_count);
+            counter->hit_count = 0;
+            counter->cycle_count = 0;
+        }
+    }
+#endif
+};
+
 i32 main() {
-    u32 window_width = 800;
-    u32 window_height = 600;
-    u32 bytes_per_pixel = 4;
-    u32 buffer_size = window_width * window_height * bytes_per_pixel;
+    mach_timebase_info(&macos_timebase);
 
-    // TODO: Hacer permanente y transient
-    Arena *arena = arena_make(512 * MB);
-    void *memory = arena_alloc(arena, buffer_size);
+    App_Memory app_memory = {0};
+    app_memory.permanent_size = 32 * MB;
+    app_memory.transient_size = 1 * GB;
 
-    Bitmap_Buffer bitmap_buffer;
-    bitmap_buffer.arena = arena;
-    bitmap_buffer.width = window_width;
-    bitmap_buffer.height = window_height;
-    bitmap_buffer.bytes_per_pixel = bytes_per_pixel;
-    bitmap_buffer.memory = memory;
+    u64 total_size = app_memory.permanent_size + app_memory.transient_size;
+    void *total_memory = mmap(0, total_size, PROT_READ|PROT_WRITE,
+                              MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+    app_memory.permanent = (u8 *)total_memory;
+    app_memory.transient = (u8 *)total_memory + app_memory.permanent_size;
+
+    Thread_Context thread = {0};
 
     Input inputs[2] = {0};
     Input *new_input = &inputs[0];
     Input *old_input = &inputs[1];
 
+    Arena *arena = arena_make(1 * GB);
+
+    u32 window_width = 800;
+    u32 window_height = 600;
+    u32 bytes_per_pixel = 4;
+    u32 buffer_size = window_width * window_height * bytes_per_pixel;
+
+    Bitmap_Buffer bitmap_buffer = {0};
+    bitmap_buffer.width = window_width;
+    bitmap_buffer.height = window_height;
+    bitmap_buffer.bytes_per_pixel = bytes_per_pixel;
+    bitmap_buffer.pitch = window_width * bytes_per_pixel;
+    bitmap_buffer.memory = arena_alloc(arena, buffer_size);
+
     msg(id, cls("NSApplication"), "sharedApplication");
     msg1(void, NSApp, "setActivationPolicy:", NSInteger, 0);
     id window = msg4(id, msg(id, cls("NSWindow"), "alloc"),
                      "initWithContentRect:styleMask:backing:defer:", CGRect,
-                     CGRectMake(0, 0, bitmap_buffer.width, 
-                     bitmap_buffer.height), NSUInteger, 3, NSUInteger, 2, 
-                     BOOL, NO);
+                     CGRectMake(0, 0, bitmap_buffer.width, bitmap_buffer.height),
+                     NSUInteger, 7, NSUInteger, 2, BOOL, NO);
     Class windelegate = objc_allocateClassPair((Class)cls("NSObject"),
                                                "Delegate", 0);
     class_addMethod(windelegate, sel_getUid("windowShouldClose:"),
@@ -128,7 +193,10 @@ i32 main() {
     msg(void, window, "center");
     msg1(void, NSApp, "activateIgnoringOtherApps:", BOOL, YES);
 
-    i64 last_time = macos_time();
+    i32 monitor_hz = macos_monitor_hz();
+    f32 target_seconds_per_frame = 1.0f / monitor_hz;
+
+    u64 last_time = macos_clock_time();
     while (true) {
 
         *new_input = (Input){0};
@@ -136,6 +204,15 @@ i32 main() {
         for (u32 i = 0; i < array_size(new_input->keys); i++) {
             new_input->keys[i].ended_down = old_input->keys[i].ended_down;
         }
+
+        for (u32 i = 0; i < array_size(new_input->mouse_buttons); i++) {
+            new_input->mouse_buttons[i].ended_down = old_input->mouse_buttons[i].ended_down;
+        }
+
+        new_input->mouse_x = old_input->mouse_x;
+        new_input->mouse_y = old_input->mouse_y;
+        new_input->mouse_z = old_input->mouse_z;
+        new_input->dt = target_seconds_per_frame;
 
         id content_view = msg(id, window, "contentView");
         msg1(void, content_view, "setNeedsDisplay:", BOOL, YES);
@@ -148,17 +225,24 @@ i32 main() {
             bool prevent_default = false;
             NSUInteger event_type = msg(NSUInteger, event, "type");
             switch (event_type) {
-                case 1: { // NSEventTypeMouseDown
-                          // f->mouse |= 1;
+                case 1: { // Left Mouse Down
+                    process_keyboard_state(&new_input->mouse_buttons[0], true);
                 } break;
-                case 2: { // NSEventTypeMouseUp
-                          // f->mouse &= ~1;
+                case 2: { // Left Mouse Up
+                    process_keyboard_state(&new_input->mouse_buttons[0], false);
+                } break;
+                case 3: { // Right Mouse Down
+                    process_keyboard_state(&new_input->mouse_buttons[1], true);
+                } break;
+                case 4: { // Right Mouse Up
+                    process_keyboard_state(&new_input->mouse_buttons[1], false);
                 } break;
                 case 5:
                 case 6: { // NSEventTypeMouseMoved
-                          // CGPoint xy = msg(CGPoint, ev, "locationInWindow");
-                          // f->x = (int)xy.x;
-                          // f->y = (int)(f->height - xy.y);
+                    CGPoint xy = msg(CGPoint, event, "locationInWindow");
+                    new_input->mouse_x = (i32)xy.x;
+                    new_input->mouse_y = (i32)(window_height - xy.y);
+                    prevent_default = true;
                 } break;
                 case 10: // NSEventTypeKeyDown
                 case 11: { //NSEventTypeKeyUp
@@ -182,19 +266,34 @@ i32 main() {
             }
         }
 
-        i64 end_time = macos_time();
-        i64 elapsed_time = end_time - last_time;
+        update_and_render(&app_memory, &thread, &bitmap_buffer, new_input);
+        handle_cycle_counters();
 
-        update_and_render(&bitmap_buffer, new_input, elapsed_time);
+        f32 seconds_elapsed = macos_delta_seconds(last_time, macos_clock_time()); 
 
+        if (seconds_elapsed < target_seconds_per_frame) {
+            while (seconds_elapsed < target_seconds_per_frame) {
+                i64 sleep_ms = (i64)((target_seconds_per_frame - seconds_elapsed) * 1000.0f);
+                if (sleep_ms > 0) {
+                    macos_sleep(sleep_ms);
+                }
+                seconds_elapsed = macos_delta_seconds(last_time, macos_clock_time()); 
+            }
+        } else {
+            // TODO: missed frame rate
+            // TODO: logging
+        }
+
+        u64 end_time = macos_clock_time();
+#if 0
+        f32 seconds_per_frame = macos_delta_seconds(last_time, end_time); 
+        printf("%.02f ms/f\n", seconds_per_frame * 1000.0f);
+#endif
         last_time = end_time;
 
         Input *temp = new_input;
         new_input = old_input;
         old_input = temp;
-
-        // printf("fps: %ff/ms\n", (1000 / (f64)elapsed_time));
-        // printf("elapsed: %lldms/f\n", elapsed_time);
     }
 
     msg(void, window, "close");
