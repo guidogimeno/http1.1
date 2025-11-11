@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <sys/mman.h>
 
@@ -38,11 +39,89 @@ typedef double f64;
     exit(EXIT_FAILURE); \
 } while (0);
 
+#define array_size(arr) (sizeof(arr)/sizeof((arr)[0]))
+
+#define debug_assert(expression) if (!(expression)) {*(i32 *)0 = 0;}
+
+// ###################################
+// ### Math  #########################
+// ###################################
+
+typedef union {
+    struct {
+        f32 x;
+        f32 y;
+    };
+    f32 v[2];
+} Vec2_F32;
+
+inline Vec2_F32 vec2_f32(f32 x, f32 y) {
+    Vec2_F32 result;
+
+    result.x = x;
+    result.y = y;
+
+    return result;
+}
+
+inline Vec2_F32 vec2_f32_add(Vec2_F32 a, Vec2_F32 b) {
+    Vec2_F32 result = {
+        .x = a.x + b.x,
+        .y = a.y + b.y,
+    };
+    return result;
+}
+
+inline Vec2_F32 vec2_f32_mult(Vec2_F32 a, Vec2_F32 b) {
+    Vec2_F32 result = {
+        .x = a.x * b.x,
+        .y = a.y * b.y,
+    };
+    return result;
+}
+
+inline Vec2_F32 vec2_f32_sub(Vec2_F32 a, Vec2_F32 b) {
+    Vec2_F32 result = {
+        .x = a.x - b.x,
+        .y = a.y - b.y,
+    };
+    return result;
+}
+
+typedef struct {
+    struct {
+        f32 x;
+        f32 y;
+        f32 z;
+        f32 w;
+    };
+    f32 v[4];
+} Vec4_F32;
+
+inline Vec4_F32 vec4_f32(f32 x, f32 y, f32 z, f32 w) {
+    Vec4_F32 result;
+
+    result.x = x;
+    result.y = y;
+    result.z = z;
+    result.w = w;
+
+    return result;
+}
+
 f32 math_exp(f32 a) {
     union { f32 f; f32 i; } u, v;
     u.i = (i32)(6051102.0f * a + 1056478197.0f);
     v.i = (i32)(1056478197.0f - 6051102.0f * a);
     return u.f / v.f;
+}
+
+inline f32 math_sin(f32 radians) {
+    return sinf(radians);
+}
+
+inline f32 math_cos(f32 radians) {
+    return cosf(radians);
 }
 
 f32 math_pow(f32 a, f32 b) {
@@ -66,7 +145,9 @@ f32 math_pow(f32 a, f32 b) {
     return flipped ? 1.0f/r : r;
 }
 
-#define array_size(arr) (sizeof(arr)/sizeof((arr)[0]))
+i32 math_round_f32_to_i32(f32 num) {
+    return (i32)(num + 0.5f);
+}
 
 
 // ###################################
@@ -94,6 +175,7 @@ struct Arena_Temp {
 __thread Arena *thread_local_arenas_pool[MAX_SCRATCH_COUNT] = {0, 0};
 
 Arena *arena_make(u64 capacity);
+void arena_init(Arena *arena, u8 *data, u64 capacity);
 void *arena_alloc(Arena *arena, u64 size);
 void *arena_alloc_aligned(Arena *arena, u64 size, size_t align);
 void arena_reset(Arena *arena);
@@ -136,6 +218,13 @@ static uintptr_t align_forward(uintptr_t ptr, size_t align) {
 		p += a - modulo;
 	}
 	return p;
+}
+
+void arena_init(Arena *arena, u8 *data, u64 capacity) {
+    *arena = (Arena){0};
+    arena->data = data;
+    arena->size = 0;
+    arena->capacity = capacity;
 }
 
 void *arena_alloc(Arena *arena, u64 size) {

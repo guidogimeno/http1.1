@@ -1,7 +1,3 @@
-// TODO:
-// Revisar por que en MAC se traba en cierto punto cuando mando muchos requests
-// Comando a probar: ab -k -c 10 -n 10000 http://127.0.0.1:8080/foo
-
 static i32 signals_init(void);
 static void signal_handler(i32 signal_number);
 static i32 start_listening(u32 port, char *host);
@@ -144,7 +140,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Arena *arena, S
 
             case PATTERN_PARSER_STATE_PARSING_PATH_SEGMENT: {
 
-                if (is_alphanum(c)) {
+                if (is_alphanum(c) || c == '-' || c == '_') {
                     break;
                 }
 
@@ -171,7 +167,7 @@ static void pattern_parser_parse(Pattern_Parser *pattern_parser, Arena *arena, S
 
             case PATTERN_PARSER_STATE_PARSING_PATH_PARAM: {
 
-                if (is_letter(c)) {
+                if (is_letter(c) || c == '_') {
                     break;
                 }
 
@@ -536,7 +532,6 @@ static bool server_handle_connection(Server *server, Connection *connection) {
             bytes_parsed += parser_parse_request(parser, request);
             
             if (parser->state == PARSER_STATE_FINISHED) {
-
                 Http_Handler *handler = find_handler_while_adding_path_params(&request->first_segment,
                                                                               server->patterns_tree);
                 if (handler) {
@@ -564,15 +559,34 @@ static bool server_handle_connection(Server *server, Connection *connection) {
                 } else {
                     // TODO: responder un 404 o algo
                 }
-            }
-
-            if (parser->state == PARSER_STATE_FAILED) {
+            } else if (parser->state == PARSER_STATE_FAILED) {
                 break;
+            } else {
+                String *expect = http_headers_get(&request->headers_map, string_lit("expect"));
+                if (string_eq(*expect, string_lit("100-continue"))) {
+                    Response response;
+                    response_init(&response);
+                    http_response_set_status(&response, 100);
+
+                    String *content_length = http_headers_get(&request->headers_map, string_lit("content-length"));
+                    if (content_length) {
+                        i64 body_size = string_to_i64(*content_length);
+                        if (body_size < 0 || body_size > MAX_BODY_SIZE) { 
+                            http_response_set_status(&response, 400);
+                        }
+                    }
+                    
+                    if (connection_write(connection, response) == -1) {
+                        connection->state = CONNECTION_STATE_FAILED;
+                        break;
+                    }
+                } else {
+                    // TODO: logging
+                }
             }
         }
 
-        if (parser->bytes_read < buffer->size || 
-            parser->state == PARSER_STATE_FAILED ||
+        if (parser->state == PARSER_STATE_FAILED ||
             connection->state == CONNECTION_STATE_FAILED) {
             break;
         }
@@ -995,7 +1009,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
 
                 if (is_alphanum(c) || c == '/' || c == '.' || c == '=' 
                                    || c == '?' || c == '_' || c == '-'
-                                   || c == '&') {
+                                   || c == '&' || c == ',' ) {
 
                     break;
                 }
@@ -1114,12 +1128,12 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
             case PARSER_STATE_PARSING_HEADER_VALUE_BEGIN:
 
                 if (c == '\r') {
-                    parser->state = PARSER_STATE_FAILED;
-                    break;
+                    headers_put(&request->headers_map, parser->header_name, string_lit(""));
+                    parser->state = PARSER_STATE_PARSING_HEADER_VALUE_END;
+                } else {
+                    parser_mark(parser, parser->at);
+                    parser->state = PARSER_STATE_PARSING_HEADER_VALUE;
                 }
-
-                parser_mark(parser, parser->at);
-                parser->state = PARSER_STATE_PARSING_HEADER_VALUE;
 
                 break;
 
@@ -1160,8 +1174,7 @@ static u32 parser_parse_request(Parser *parser, Request *request) {
                 if (content_length != NULL) {
 
                     i64 body_size = string_to_i64(*content_length);
-
-                    if (body_size < 0 || body_size > 4 * KB) { 
+                    if (body_size < 0 || body_size > MAX_BODY_SIZE) { 
                         parser->state = PARSER_STATE_FAILED;
                         break;
                     } 
@@ -1349,6 +1362,7 @@ static void request_add_segment_literal(Request *request, Arena *arena, String l
 
 static String http_status_reason(u16 status) {
     switch (status) {
+        case 100: return string_lit("Continue");
         case 200: return string_lit("Ok");
         case 201: return string_lit("Created");
         case 400: return string_lit("Bad Request");
@@ -1368,7 +1382,7 @@ static void response_init(Response *response) {
 }
 
 void http_response_set_status(Response *response, u32 status) {
-    response->status = 200;
+    response->status = status;
 }
 
 void http_response_add_header(Response *response, String key, String value) {
@@ -1376,6 +1390,11 @@ void http_response_add_header(Response *response, String key, String value) {
 }
 
 void http_response_write(Response *response, u8 *content, size_t size) {
+    // TODO: Deberia copiar la memoria o..
+    // que aca mismo se escriba a la conexion porque sino estoy liberando 
+    // la arena con la informacion ANTES de que se envie la data y podria
+    // llegar a ser pisada. Por ahora no pasa porque todo corre en el hilo
+    // principal
     response->body.data = content;
     response->body.size = size;
 }

@@ -35,6 +35,7 @@
 #define MAX_EVENTS 100
 #define MAX_PARSER_BUFFER_CAPACITY 8 * KB
 #define MAX_HEADERS_CAPACITY 32
+#define MAX_BODY_SIZE 4 * KB
 
 typedef struct Server Server;
 typedef struct Connection Connection;

@@ -6,24 +6,14 @@
 #include "http.c"
 #include "json.c"
 
-static void set_process_name(int argc, char *argv[], char *env[], char *name) {
-    size_t available = 0, length = strlen(name) + 1;
-
-    if (argc >= 1) {
-        available += strlen(argv[0]);
-    }
-
-    for (i32 n = 0; env[n] != NULL; n ++) {
-        available += strlen(env[0]);
-    }
-
-    if (length > available) {
-        return;
-    }
-
-    memcpy(argv[0], name, length);
+static void send_json(Arena *arena, Response *response, u32 status, JSON_Element *json) {
+    String json_str = json_to_string(arena, json);
+    http_response_add_header(response, string_lit("content-type"), string_lit("application/json"));
+    http_response_set_status(response, status);
+    http_response_write(response, (u8 *)json_str.data, json_str.size);
 }
 
+// TODO: Hacer una version propia en mi STDLIB
 static char* read_file_to_string(const char* filename) {
     FILE* file = fopen(filename, "r");  // Use "rb" for binary mode if needed
     if (!file) {
@@ -73,36 +63,26 @@ static char* read_file_to_string(const char* filename) {
     return buffer;
 }
 
-static void handler(Request *request, Response *response) {
+static void handle_strange_configs(Request *request, Response *response) {
     Arena_Temp scratch = get_scratch(0, 0);
     Arena *arena = scratch.arena;
 
-    // String path_param = http_request_get_path_param(request, string_lit("bar"));
-    // String query_param = http_request_get_query_param(request, string_lit("foo"));
-
-    char *content = read_file_to_string("copy.json");
+    char *content = read_file_to_string("foo.json");
     String json_str = string(content);
 
-    JSON_Element element;
-    json_parse(arena, json_str, &element);
-    String body = json_to_string(arena, &element);
+    JSON_Element result = {0};
+    json_parse(arena, (u8 *)json_str.data, json_str.size, &result);
 
-    http_response_add_header(response, string_lit("content-type"), string_lit("application/json"));
-    http_response_set_status(response, 200);
-    http_response_write(response, (u8 *)body.data, body.size);
-
+    send_json(arena, response, 200, &result);
     release_scratch(scratch);
 }
 
 int main(int argc, char *argv[], char *env[]) {
-    set_process_name(argc, argv, env, "HTTP_SERVER_GG");
-
     Arena *arena = arena_make(1 * MB);
 
     Server *server = http_server_make(arena);
 
-    http_server_handle(server, "GET /foo/{bar}/baz", &handler);
+    http_server_handle(server, "GET /", &handle_strange_configs);
 
-    return http_server_start(server, 8080, "127.0.0.1");
+    return http_server_start(server, 8888, "127.0.0.1");
 }
-

@@ -23,7 +23,7 @@ case "$1" in
         if [ -f "main" ]; then
             rm -f "main"
         fi
-        clang -O2 -std=c11 -Wall -Werror -x objective-c -framework Cocoa -framework CoreGraphics -framework Foundation macos_layer.c -o main 
+        clang -O2 -DAPP_INTERNAL=1 -std=c11 -Wall -Werror -x objective-c -framework Cocoa -framework CoreGraphics -framework Foundation macos_layer.c -o main 
         ./main
         ;;
     "build")

@@ -39,9 +39,14 @@ enum JSON_Parser_State{
     JSON_STATUS_SUCCESS
 };
 
+typedef struct {
+    u8 *data;
+    size_t size;
+} JSON_Buffer;
+
 struct JSON_Parser {
     JSON_Parser_State state;
-    String json_str;
+    JSON_Buffer buffer;
     u32 at;
 };
 
@@ -65,8 +70,7 @@ struct JSON_Token{
     String value;
 };
 
-JSON_Parser_State json_parse(Arena *arena, String json_str, JSON_Element *json);
-JSON_Parser_State json_parse_cstr(Arena *arena, char *json_str, size_t json_size, JSON_Element *json);
+JSON_Parser_State json_parse(Arena *arena, u8 *json_bytes, size_t json_size, JSON_Element *json);
 
 String json_to_string(Arena *arena, JSON_Element *json);
 
@@ -96,6 +100,8 @@ void json_object_add_string(JSON_Element *object, String key, String value, Aren
 void json_object_add_number(JSON_Element *object, String key, f64 value, Arena *arena);
 void json_object_add_boolean(JSON_Element *object, String key, b32 value, Arena *arena);
 void json_object_add_null(JSON_Element *object, String key, Arena *arena);
+void json_object_add_object(JSON_Element *object, String key, JSON_Element *value);
+void json_object_add_array(JSON_Element *object, String key, JSON_Element *value);
 
 void json_array_add(JSON_Element *array, JSON_Element *element);
 void json_array_add_string(JSON_Element *array, String value, Arena *arena);
